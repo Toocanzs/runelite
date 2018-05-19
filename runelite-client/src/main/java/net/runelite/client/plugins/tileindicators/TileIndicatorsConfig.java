@@ -45,4 +45,34 @@ public interface TileIndicatorsConfig extends Config
 	{
 		return Color.GRAY;
 	}
+
+	@ConfigItem(
+			keyName = "ocupiedTileCoor",
+			name = "Color of current ocupied tile highlighting",
+			description = "Configures the highlight color of current ocupied tile"
+	)
+	default Color highlightOccupiedColor()
+	{
+		return Color.GRAY;
+	}
+
+	@ConfigItem(
+			keyName = "destinationTile",
+			name = "Show destination tile",
+			description = "Configures the destination tile"
+	)
+	default boolean destinationTileEnabled()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+			keyName = "occupiedTile",
+			name = "Show occupied tile",
+			description = "Configures the occupied tile"
+	)
+	default boolean occupiedTileEnabled()
+	{
+		return false;
+	}
 }
