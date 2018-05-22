@@ -33,7 +33,7 @@ import javax.swing.BorderFactory;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import net.runelite.client.ui.FontManager;
-import net.runelite.client.ui.JShadowedLabel;
+import net.runelite.client.ui.components.shadowlabel.JShadowedLabel;
 
 class UICombinedActionSlot extends JPanel
 {
@@ -60,7 +60,7 @@ class UICombinedActionSlot extends JPanel
 		add(uiIcon, BorderLayout.LINE_START);
 
 		JPanel uiInfo = new JPanel(new GridLayout(2, 1));
-		uiInfo.setOpaque(false);
+		uiInfo.setBackground(Color.ORANGE);
 
 		uiLabelTitle = new JShadowedLabel("No Action Selected");
 		uiInfo.add(uiLabelTitle);
