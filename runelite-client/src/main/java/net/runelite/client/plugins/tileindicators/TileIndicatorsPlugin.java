@@ -78,11 +78,6 @@ public class TileIndicatorsPlugin extends Plugin
 		ticks++;
 		if (tektonTicks > 0)
 			tektonTicks--;
-		Widget raidsPoints = client.getWidget(WidgetInfo.RAIDS_POINTS_INFOBOX);
-		if (raidsPoints != null)
-		{
-			raidsPoints.setHidden(true);
-		}
 	}
 
 	@Getter
