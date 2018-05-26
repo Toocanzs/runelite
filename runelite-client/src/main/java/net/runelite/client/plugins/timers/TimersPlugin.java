@@ -37,6 +37,7 @@ import net.runelite.api.Varbits;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.ConfigChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.VarbitChanged;
@@ -78,6 +79,10 @@ import static net.runelite.client.plugins.timers.GameTimer.VENGEANCE;
 import static net.runelite.client.plugins.timers.GameTimer.VENGEANCEOTHER;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
 @PluginDescriptor(
 	name = "Timers"
 )
@@ -99,6 +104,8 @@ public class TimersPlugin extends Plugin
 	{
 		return configManager.getConfig(TimersConfig.class);
 	}
+
+	List<GameTimer> deferredGameTimers = new ArrayList<GameTimer>();
 
 	@Override
 	protected void shutDown() throws Exception
@@ -493,6 +500,27 @@ public class TimersPlugin extends Plugin
 				createGameTimer(ICEBARRAGE);
 			}
 		}
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick event)
+	{
+		Iterator<GameTimer> iterator = deferredGameTimers.iterator();
+		while (iterator.hasNext())
+		{
+			GameTimer timer = iterator.next();
+			createGameTimer(timer);
+			iterator.remove();
+		}
+	}
+
+	/**
+	 * Registers a timer to be added to the info box next tick. Timers that rely on menu options should be deferred.
+	 * @param timer
+	 */
+	public void createDeferredGameTimer(GameTimer timer)
+	{
+		deferredGameTimers.add(timer);
 	}
 
 	public void createGameTimer(GameTimer timer)
