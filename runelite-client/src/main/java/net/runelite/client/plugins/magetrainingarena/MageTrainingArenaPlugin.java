@@ -250,6 +250,7 @@ public class MageTrainingArenaPlugin extends Plugin
 			if (counter != null)
 			{
 				infoBoxManager.removeInfoBox(counter);
+				counter = null;
 			}
 		}
 	}
