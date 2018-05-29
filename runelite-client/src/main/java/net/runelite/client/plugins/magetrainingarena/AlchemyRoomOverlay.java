@@ -61,7 +61,9 @@ public class AlchemyRoomOverlay extends Overlay
 				BufferedImage image = plugin.getCabinetItemImage(cabinet.getId());
 				LocalPoint localLoc = LocalPoint.fromWorld(client, cabinet.getWorldLocation());
 				if (image == null || localLoc == null)
+				{
 					continue;
+				}
 				OverlayUtil.renderImageLocation(client, graphics, localLoc, image, 100);
 			}
 		}

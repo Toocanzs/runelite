@@ -205,11 +205,15 @@ public class MageTrainingArenaPlugin extends Plugin
 		int permutationArrayIndex = alchemyObjectIDToArrayIndexMap.get(objectId);
 
 		if (currentPermutation == null)
+		{
 			return null;
+		}
 		AlchemyRoomItem item = currentPermutation[permutationArrayIndex];
 
 		if (item == null)
+		{
 			return null;
+		}
 
 		BufferedImage image = itemManager.getImage(item.itemID);
 		return image;
