@@ -146,7 +146,9 @@ public class MageTrainingArenaPlugin extends Plugin
 			String item = message.split("You found: ")[1];
 			Integer arrayIndex = alchemyObjectIDToArrayIndexMap.get(lastObjectIdClicked);
 			if (arrayIndex == null)
+			{
 				return;
+			}
 
 			currentPermutation = getPermutation(item, arrayIndex);
 		}
@@ -154,11 +156,15 @@ public class MageTrainingArenaPlugin extends Plugin
 		{
 			Integer arrayIndex = alchemyObjectIDToArrayIndexMap.get(lastObjectIdClicked);
 			if (arrayIndex == null)
+			{
 				return;
+			}
 
 			//Reset if we start finding nothing and the current permutation doesn't match
 			if (currentPermutation[arrayIndex] != null)
+			{
 				currentPermutation = null;
+			}
 		}
 		//Reset if you re-enter the area
 		if (message.equalsIgnoreCase("You've entered the Alchemists' Playground."))
