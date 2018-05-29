@@ -25,7 +25,6 @@
 package net.runelite.client.plugins.magetrainingarena;
 
 import net.runelite.client.ui.overlay.infobox.Counter;
-
 import java.awt.image.BufferedImage;
 
 public class GraveyardBoneCounter extends Counter
