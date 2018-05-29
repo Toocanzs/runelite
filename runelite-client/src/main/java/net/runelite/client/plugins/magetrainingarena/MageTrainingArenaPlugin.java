@@ -48,6 +48,8 @@ import net.runelite.client.util.QueryRunner;
 
 import javax.inject.Inject;
 import java.awt.image.BufferedImage;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -76,7 +78,11 @@ public class MageTrainingArenaPlugin extends Plugin
 
 	private AlchemyRoomOverlay alchemyRoomOverlay;
 
+	private AlchemistTimer alchemistTimer;
+
 	private Map<Integer, Integer> alchemyObjectIDToArrayIndexMap;
+
+	private String lastHash = "";
 
 	//Permutation order goes from north west->south west->south west->north east
 	private AlchemyRoomItem[][] alchemyPermutations = {
@@ -102,10 +108,14 @@ public class MageTrainingArenaPlugin extends Plugin
 
 	private GraveyardBoneCounter counter;
 
+	@Getter
+	private int elapsedTicks = 0;
+
 	@Override
 	protected void startUp() throws Exception
 	{
 		alchemyRoomOverlay = new AlchemyRoomOverlay(client, this);
+		alchemistTimer = new AlchemistTimer(client, this);
 		setupHashMap();
 	}
 
@@ -132,9 +142,9 @@ public class MageTrainingArenaPlugin extends Plugin
 	}
 
 	@Override
-	public Overlay getOverlay()
+	public Collection<Overlay> getOverlays()
 	{
-		return alchemyRoomOverlay;
+		return Arrays.asList(alchemyRoomOverlay, alchemistTimer);
 	}
 
 	@Subscribe
@@ -170,6 +180,7 @@ public class MageTrainingArenaPlugin extends Plugin
 		if (message.equalsIgnoreCase("You've entered the Alchemists' Playground."))
 		{
 			currentPermutation = null;
+			elapsedTicks = 0;
 		}
 	}
 
@@ -215,15 +226,56 @@ public class MageTrainingArenaPlugin extends Plugin
 		return image;
 	}
 
+	private void onReset()
+	{
+		currentPermutation = null;
+		elapsedTicks = 0;
+	}
+
+	private void checkItemChange()
+	{
+		Widget alchemistTitle = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_TITLE);
+		if (alchemistTitle != null && !alchemistTitle.isHidden())
+		{
+			Widget leatherBootsValueWidget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_LEATHER_BOOTS_VALUE);
+			Widget adamantKiteshieldValueWidget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_LEATHER_BOOTS_VALUE);
+			Widget adamantHelmValueWidget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_LEATHER_BOOTS_VALUE);
+			Widget emeraldValueWidget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_LEATHER_BOOTS_VALUE);
+			Widget runeLongswordValueWidget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_LEATHER_BOOTS_VALUE);
+
+			if (leatherBootsValueWidget == null || adamantKiteshieldValueWidget == null || adamantHelmValueWidget == null || emeraldValueWidget == null || runeLongswordValueWidget == null)
+			{
+				return;
+			}
+			String hash = leatherBootsValueWidget.getText() + "-" + adamantKiteshieldValueWidget.getText() + "-" + adamantHelmValueWidget.getText() + "-" + emeraldValueWidget.getText() + "-" + runeLongswordValueWidget.getText();
+			if (!hash.equals(lastHash))
+			{
+				lastHash = hash;
+				onReset();
+			}
+		}
+	}
+
 	@Subscribe
 	public void OnGameTick(GameTick event)
 	{
 		final GameObjectQuery query = new GameObjectQuery().idEquals(getCabinetObjectIds());
 		cabinets = queryRunner.runQuery(query);
 
+		sumFruitGainedFromBones();
+
+		Widget alchemistTitle = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_TITLE);
+		if (alchemistTitle != null && !alchemistTitle.isHidden())
+		{
+			checkItemChange();
+			elapsedTicks++;
+		}
+	}
+
+	private void sumFruitGainedFromBones()
+	{
 		Item[] items = queryRunner.runQuery(new InventoryItemQuery(InventoryID.INVENTORY));
 
-		//Sum fruit from bones
 		totalFruitFromBones = 0;
 
 		Widget widget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_GRAVEYARD_TITLE);

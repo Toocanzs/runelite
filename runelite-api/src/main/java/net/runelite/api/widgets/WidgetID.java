@@ -95,6 +95,7 @@ public class WidgetID
 	public static final int KINGDOM_GROUP_ID = 392;
 	public static final int BARROWS_GROUP_ID = 24;
 	public static final int MAGE_TRAINING_ARENA_GRAVEYARD_GROUP_ID = 196;
+	public static final int MAGE_TRAINING_ARENA_ALCHEMIST_GROUP_ID = 194;
 
 	static class WorldMap
 	{
@@ -493,5 +494,20 @@ public class WidgetID
 		static final int BARROWS_BROTHERS = 8;
 		static final int BARROWS_POTENTIAL = 9;
 		static final int BARROWS_REWARD_INVENTORY = 3;
+	}
+
+	static class MageTrainingArenaGraveyard
+	{
+		public static final int TITLE = 1;
+	}
+
+	static class MageTrainingArenaAlchemist
+	{
+		public static final int TITLE = 2;
+		public static final int LEATHER_BOOTS_VALUE = 10;
+		public static final int ADAMANT_KITESHIELD_VALUE = 11;
+		public static final int ADAMANT_HELM_VALUE = 12;
+		public static final int EMERALD_VALUE = 13;
+		public static final int RUNE_LONGSWORD_VALUE = 14;
 	}
 }
