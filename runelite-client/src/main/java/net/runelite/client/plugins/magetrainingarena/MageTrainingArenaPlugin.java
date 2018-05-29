@@ -45,7 +45,6 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.QueryRunner;
-
 import javax.inject.Inject;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
@@ -267,6 +266,9 @@ public class MageTrainingArenaPlugin extends Plugin
 		Widget alchemistTitle = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_TITLE);
 		if (alchemistTitle != null && !alchemistTitle.isHidden())
 		{
+
+			Widget leatherBootsValueWidget = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_ALCHEMIST_LEATHER_BOOTS_VALUE);
+
 			checkItemChange();
 			elapsedTicks++;
 		}
@@ -302,6 +304,7 @@ public class MageTrainingArenaPlugin extends Plugin
 			if (counter != null)
 			{
 				infoBoxManager.removeInfoBox(counter);
+				counter = null;
 			}
 		}
 	}
