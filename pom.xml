@@ -38,7 +38,7 @@
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<java.version>1.8</java.version>
-		<lombok.version>1.16.20</lombok.version>
+		<lombok.version>1.16.22</lombok.version>
 
 		<maven.javadoc.skip>true</maven.javadoc.skip>
 		<checkstyle.skip>true</checkstyle.skip>
@@ -89,6 +89,10 @@
 			<id>runelite</id>
 			<name>RuneLite</name>
 			<url>http://repo.runelite.net</url>
+			<snapshots>
+				<enabled>true</enabled>
+				<updatePolicy>always</updatePolicy>
+			</snapshots>
 		</repository>
 	</repositories>
 	<pluginRepositories>
@@ -100,6 +104,10 @@
 			<id>runelite-plugins</id>
 			<name>RuneLite Plugins</name>
 			<url>http://repo.runelite.net</url>
+			<snapshots>
+				<enabled>true</enabled>
+				<updatePolicy>always</updatePolicy>
+			</snapshots>
 		</pluginRepository>
 	</pluginRepositories>
 
