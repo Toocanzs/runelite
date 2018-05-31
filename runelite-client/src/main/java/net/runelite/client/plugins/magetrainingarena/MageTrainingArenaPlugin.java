@@ -22,7 +22,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
 package net.runelite.client.plugins.magetrainingarena;
 
 import com.google.common.eventbus.Subscribe;
@@ -36,7 +35,6 @@ import net.runelite.api.ItemID;
 import net.runelite.api.NPC;
 import net.runelite.api.NpcID;
 import net.runelite.api.ObjectID;
-import net.runelite.api.Point;
 import net.runelite.api.Tile;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ChatMessage;
@@ -62,7 +60,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import static net.runelite.client.plugins.magetrainingarena.AlchemyRoomItem.ADAMANT_KITESHIELD;
 import static net.runelite.client.plugins.magetrainingarena.AlchemyRoomItem.ADAMANT_MED_HELM;
 import static net.runelite.client.plugins.magetrainingarena.AlchemyRoomItem.EMERALD;
@@ -107,15 +104,12 @@ public class MageTrainingArenaPlugin extends Plugin
 	private int totalFruitFromBones = 0;
 	private GraveyardBoneCounter counter;
 
-	private GroundObject telekineticGoalGroundObject;
-	private NPC telekineticGuardianNpc;
-	private TelekineticPuzzle currentPuzzle;
+	TelekineticPuzzle currentTelekineticPuzzle;
 	private int telekineticPuzzleStep = 0;
 
-	//Holds the current target and next target
+	//Holds the current target and next target for the overlay to render
 	@Getter
 	private Tile[] playerTargetTiles = new Tile[2];
-
 	@Getter
 	private Tile[] guardianTargetTiles = new Tile[2];
 
@@ -243,130 +237,65 @@ public class MageTrainingArenaPlugin extends Plugin
 		cabinets = queryRunner.runQuery(query);
 
 		sumTotalFruitFromBones();
-
-		findTelekineticObjects();
+		checkForTelekineticPuzzle();
 	}
 
-	private int worldToRelative(int world)
-	{
-		return world % 192;
-	}
-
-	private void findTelekineticObjects()
+	private void checkForTelekineticPuzzle()
 	{
 		Widget telekineticTitle = client.getWidget(WidgetInfo.MAGE_TRAINING_ARENA_TELEKINETIC_TITLE);
 		if (telekineticTitle != null && !telekineticTitle.isHidden())
 		{
 			final GroundObjectQuery groundObjectQuery = new GroundObjectQuery().idEquals(ObjectID.TELEKINETIC_GOAL);
 			GroundObject[] groundObjectResult = queryRunner.runQuery(groundObjectQuery);
-			telekineticGoalGroundObject = groundObjectResult.length >= 1 ? groundObjectResult[0] : null;
+			GroundObject telekineticGoalGroundObject = groundObjectResult.length >= 1 ? groundObjectResult[0] : null;
 
 			final NPCQuery npcQuery = new NPCQuery().idEquals(NpcID.MAZE_GUARDIAN);
 			NPC[] npcResult = queryRunner.runQuery(npcQuery);
-			telekineticGuardianNpc = npcResult.length >= 1 ? npcResult[0] : null;
+			NPC telekineticGuardianNpc = npcResult.length >= 1 ? npcResult[0] : null;
 
-			findCurrentPuzzle();
-
-			if (currentPuzzle != null && telekineticGuardianNpc != null && telekineticGoalGroundObject != null && telekineticPuzzleStep < currentPuzzle.steps.length)
+			if (telekineticGoalGroundObject == null)
 			{
-				//Point guardianCurrentLocation = getRelativePoint(telekineticGuardianNpc.getWorldLocation());
-				WorldPoint guardianWorldLocation = telekineticGuardianNpc.getWorldLocation();
-
-				int relativeGuardianX = worldToRelative(guardianWorldLocation.getX());
-				int relativeGuardianY = worldToRelative(guardianWorldLocation.getY());
-
-				WorldPoint goalWorldLocation = telekineticGoalGroundObject.getWorldLocation();
-				//Point goalRelativeLocation = getRelativePoint(telekineticGoalGroundObject.getWorldLocation());
-				int goalRelativeX = worldToRelative(goalWorldLocation.getX());
-				int goalRelativeY = worldToRelative(goalWorldLocation.getY());
-				//Point guardianTargetOffset = getRelativePointFromOffset(goalRelativeLocation, );
-
-				Point guardianTargetOffset = currentPuzzle.steps[telekineticPuzzleStep].guardianTargetOffset;
-				int relativeGuardianTargetX =  worldToRelative(goalWorldLocation.getX()) + guardianTargetOffset.getX();
-				int relativeGuardianTargetY =  worldToRelative(goalWorldLocation.getY()) + guardianTargetOffset.getY();
-
-				if (relativeGuardianX == relativeGuardianTargetX && relativeGuardianY == relativeGuardianTargetY)//guardianCurrentLocation.equals(guardianTargetOffset))
-				{
-					telekineticPuzzleStep++;
-				}
-
-
-				findTargetTiles(telekineticGoalGroundObject);
-
+				resetTelekinetic();
 			}
+
+
+			if (currentTelekineticPuzzle == null && telekineticGoalGroundObject != null && telekineticGuardianNpc != null)
+			{
+				Tile[][] tiles = client.getRegion().getTiles()[client.getPlane()];
+				WorldPoint startPoint = telekineticGuardianNpc.getWorldLocation();
+				WorldPoint endPoint = telekineticGoalGroundObject.getWorldLocation();
+
+				currentTelekineticPuzzle = TelekineticPuzzle.findTelekineticPuzzle(startPoint, endPoint, tiles);
+			}
+			getTargetTiles(telekineticGoalGroundObject, telekineticGuardianNpc);
 		}
 	}
 
-	private void findTargetTiles(GroundObject telekineticGoalGroundObject)
+	private void getTargetTiles(GroundObject telekineticGoalGroundObject, NPC telekineticGuardianNpc)
 	{
-		int goalRelativeX = worldToRelative(telekineticGoalGroundObject.getWorldLocation().getX());
-		int goalRelativeY = worldToRelative(telekineticGoalGroundObject.getWorldLocation().getY());
-
-		Point guardianTargetOffset = currentPuzzle.steps[telekineticPuzzleStep].guardianTargetOffset;
-		int guardianTargetX = goalRelativeX + guardianTargetOffset.getX();
-		int guardianTargetY = goalRelativeY + guardianTargetOffset.getY();
-
-		Point playerTargetOffset = currentPuzzle.steps[telekineticPuzzleStep].playerTargetOffset;
-		int playerTargetX = goalRelativeX + playerTargetOffset.getX();
-		int playerTargetY = goalRelativeY + playerTargetOffset.getY();
-
-		Point playerNextTargetLocation = null;
-		Point guardianNextTargetLocation = null;
-
-		if (telekineticPuzzleStep + 1 < currentPuzzle.steps.length)
+		if (currentTelekineticPuzzle != null)
 		{
-			guardianNextTargetLocation = new Point(
-					goalRelativeX + currentPuzzle.steps[telekineticPuzzleStep + 1].guardianTargetOffset.getX(),
-					goalRelativeY + currentPuzzle.steps[telekineticPuzzleStep + 1].guardianTargetOffset.getY()
-					);
-			playerNextTargetLocation =  new Point(
-					goalRelativeX + currentPuzzle.steps[telekineticPuzzleStep + 1].playerTargetOffset.getX(),
-					goalRelativeY + currentPuzzle.steps[telekineticPuzzleStep + 1].playerTargetOffset.getY()
-			);
-		}
-		else
-		{
-			playerTargetTiles[1] = null;
-			guardianTargetTiles[1] = null;
-		}
+			List<TelekineticTile> puzzleShortestPath = currentTelekineticPuzzle.getPuzzleShortestPath();
 
-		for (Tile[] row : client.getRegion().getTiles()[client.getPlane()])
-		{
-			for (Tile tile : row)
+			if (telekineticGoalGroundObject != null && telekineticGuardianNpc != null && puzzleShortestPath != null)
 			{
-				WorldPoint tileWorldLocation = tile.getWorldLocation();
-				int relativeX = tileWorldLocation.getX() % 192;
-				int relativeY = tileWorldLocation.getY() % 192;
-				if (relativeX == playerTargetX && relativeY == playerTargetY)
+				if (telekineticPuzzleStep < puzzleShortestPath.size())
 				{
-					playerTargetTiles[0] = tile;
+					WorldPoint currentGuardianTargetPoint = puzzleShortestPath.get(telekineticPuzzleStep).getTile().getWorldLocation();
+					if (telekineticGuardianNpc.getWorldLocation().equals(currentGuardianTargetPoint))
+					{
+						telekineticPuzzleStep++;
+					}
+
+					guardianTargetTiles[0] = puzzleShortestPath.get(telekineticPuzzleStep).getTile();
+					guardianTargetTiles[1] = telekineticPuzzleStep + 1 < puzzleShortestPath.size() ? puzzleShortestPath.get(telekineticPuzzleStep + 1).getTile() : null;
+
 				}
-				else if (playerNextTargetLocation != null && relativeX == playerNextTargetLocation.getX() && relativeY == playerNextTargetLocation.getY())
-				{
-					playerTargetTiles[1] = tile;
-				}
-				else if (relativeX == guardianTargetX && relativeY == guardianTargetY)
-				{
-					guardianTargetTiles[0] = tile;
-				}
-				else if (guardianNextTargetLocation != null && relativeX == guardianNextTargetLocation.getX() && relativeY == guardianNextTargetLocation.getY())
-				{
-					guardianTargetTiles[1] = tile;
-				}
+
+				List<TelekineticTile> playerPredictedTiles = currentTelekineticPuzzle.getPlayerPredictedTiles();
+				playerTargetTiles[0] = telekineticPuzzleStep > 0 ? playerPredictedTiles.get(telekineticPuzzleStep - 1).getTile() : null;
+				playerTargetTiles[1] = telekineticPuzzleStep < playerPredictedTiles.size() ? playerPredictedTiles.get(telekineticPuzzleStep).getTile() : null;
 			}
-		}
-	}
-
-	private void findCurrentPuzzle()
-	{
-		if (currentPuzzle == null && telekineticGoalGroundObject != null && telekineticGuardianNpc != null)
-		{
-			WorldPoint goalWorldPoint = telekineticGoalGroundObject.getWorldLocation();
-			Point endLocation = new Point(goalWorldPoint.getX() % 192, goalWorldPoint.getY() % 192);
-
-			WorldPoint guardianWorldPoint = telekineticGuardianNpc.getWorldLocation();
-			Point guardianStartLocation = new Point(guardianWorldPoint.getX() % 192, guardianWorldPoint.getY() % 192);
-			currentPuzzle = TelekineticPuzzle.findByGuardianAndEnd(endLocation, guardianStartLocation);
 		}
 	}
 
@@ -411,34 +340,24 @@ public class MageTrainingArenaPlugin extends Plugin
 	@Subscribe
 	public void onMapRegionChange(MapRegionChanged event)
 	{
-		currentPuzzle = null;
-		telekineticPuzzleStep = 0;
+		resetTelekinetic();
+	}
 
-		playerTargetTiles[0] = null;
-		playerTargetTiles[1] = null;
+	private void resetTelekinetic()
+	{
+		currentTelekineticPuzzle = null;
+		telekineticPuzzleStep = 0;
 
 		guardianTargetTiles[0] = null;
 		guardianTargetTiles[1] = null;
+
+		playerTargetTiles[0] = null;
+		playerTargetTiles[1] = null;
 	}
 
-	@Subscribe //REMOVE ALL OF THIS
+	@Subscribe
 	public void onMenuEntryOptionClicked(MenuOptionClicked event)
 	{
 		lastObjectIdClicked = event.getId();
-		Tile target = client.getSelectedRegionTile();
-		if (target == null || telekineticGoalGroundObject == null)
-			return;
-
-		final NPCQuery query = new NPCQuery().idEquals(6777);
-		NPC[] npcs = queryRunner.runQuery(query);
-		if (npcs.length <= 0)
-			return;
-		NPC guardian = npcs[0];
-		WorldPoint worldPoint = new WorldPoint(target.getWorldLocation().getX() - telekineticGoalGroundObject.getWorldLocation().getX(), target.getWorldLocation().getY() - telekineticGoalGroundObject.getWorldLocation().getY(), telekineticGoalGroundObject.getPlane());
-		System.out.println("----------------------Relative tile location: " + worldPoint.getX() + "," + worldPoint.getY());
-
-		System.out.println("End goal location: " + (telekineticGoalGroundObject.getWorldLocation().getX() % 192) + "," + (telekineticGoalGroundObject.getWorldLocation().getY() % 192));
-		System.out.println("Guardian location: " + (guardian.getWorldLocation().getX() % 192) + "," + (guardian.getWorldLocation().getY() % 192));
-
 	}
 }
