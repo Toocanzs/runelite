@@ -174,6 +174,10 @@ public class ChatMessageManager
 					return Color.decode("#00FFFF");
 				case CLANCHAT:
 					return Color.decode("#7F0000");
+				case EXAMINE_ITEM:
+				case EXAMINE_OBJECT:
+				case EXAMINE_NPC:
+					return Color.decode("#000000");
 			}
 		}
 		else
@@ -187,6 +191,10 @@ public class ChatMessageManager
 					return Color.decode("#00FFFF");
 				case CLANCHAT:
 					return Color.decode("#7F0000");
+				case EXAMINE_ITEM:
+				case EXAMINE_OBJECT:
+				case EXAMINE_NPC:
+					return Color.decode("#FFFFFF");
 			}
 		}
 
@@ -246,6 +254,11 @@ public class ChatMessageManager
 		if (chatColorConfig.opaqueClanChatInfo() != null)
 		{
 			cacheColor(new ChatColor(ChatColorType.NORMAL, chatColorConfig.opaqueClanChatInfo(), false),
+				ChatMessageType.CLANCHAT_INFO);
+		}
+		if (chatColorConfig.opaqueClanChatInfoHighlight() != null)
+		{
+			cacheColor(new ChatColor(ChatColorType.HIGHLIGHT, chatColorConfig.opaqueClanChatInfoHighlight(), false),
 				ChatMessageType.CLANCHAT_INFO);
 		}
 		if (chatColorConfig.opaqueClanChatMessage() != null)
@@ -373,6 +386,11 @@ public class ChatMessageManager
 		if (chatColorConfig.transparentClanChatInfo() != null)
 		{
 			cacheColor(new ChatColor(ChatColorType.NORMAL, chatColorConfig.transparentClanChatInfo(), true),
+				ChatMessageType.CLANCHAT_INFO);
+		}
+		if (chatColorConfig.transparentClanChatInfoHighlight() != null)
+		{
+			cacheColor(new ChatColor(ChatColorType.HIGHLIGHT, chatColorConfig.transparentClanChatInfoHighlight(), true),
 				ChatMessageType.CLANCHAT_INFO);
 		}
 		if (chatColorConfig.transparentClanChatMessage() != null)

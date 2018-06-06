@@ -291,14 +291,10 @@ public class Perspective
 	public static Polygon getCanvasTileAreaPoly(@Nonnull Client client, @Nonnull LocalPoint localLocation, int size)
 	{
 		int plane = client.getPlane();
-		int halfTile = LOCAL_TILE_SIZE / 2;
-
-		// If the size is 5, we need to shift it up and left 2 units, then expand by 5 units to make a 5x5
-		int aoeSize = size / 2;
 
 		// Shift over one half tile as localLocation is the center point of the tile, and then shift the area size
-		Point southWestCorner = new Point(localLocation.getX() - (aoeSize * LOCAL_TILE_SIZE) - halfTile + 1,
-			localLocation.getY() - (aoeSize * LOCAL_TILE_SIZE) - halfTile + 1);
+		Point southWestCorner = new Point(localLocation.getX() - (size * LOCAL_TILE_SIZE / 2),
+			localLocation.getY() - (size * LOCAL_TILE_SIZE / 2));
 		// expand by size
 		Point northEastCorner = new Point(southWestCorner.getX() + size * LOCAL_TILE_SIZE - 1,
 			southWestCorner.getY() + size * LOCAL_TILE_SIZE - 1);
@@ -494,6 +490,19 @@ public class Perspective
 		return clickBox;
 	}
 
+	/**
+	 * Determine if a given point is off-screen.
+	 *
+	 * @param client
+	 * @param point
+	 * @return
+	 */
+	private static boolean isOffscreen(@Nonnull Client client, @Nonnull Point point)
+	{
+		return (point.getX() < 0 || point.getX() >= client.getViewportWidth())
+			&& (point.getY() < 0 || point.getY() >= client.getViewportHeight());
+	}
+
 	private static Area get2DGeometry(
 		@Nonnull Client client,
 		@Nonnull List<Triangle> triangles,
@@ -537,26 +546,37 @@ public class Perspective
 				continue;
 			}
 
+			if (isOffscreen(client, a) && isOffscreen(client, b) && isOffscreen(client, c))
+			{
+				continue;
+			}
+
 			int minX = Math.min(Math.min(a.getX(), b.getX()), c.getX());
 			int minY = Math.min(Math.min(a.getY(), b.getY()), c.getY());
 
 			// For some reason, this calculation is always 4 pixels short of the actual in-client one
-			int maxX = Math.max(Math.max(a.getX(), b.getX()), c.getX()) + client.getViewportXOffset();
-			int maxY = Math.max(Math.max(a.getY(), b.getY()), c.getY()) + client.getViewportYOffset();
+			int maxX = Math.max(Math.max(a.getX(), b.getX()), c.getX()) + 4;
+			int maxY = Math.max(Math.max(a.getY(), b.getY()), c.getY()) + 4;
 
 			// ...and the rectangles in the fixed client are shifted 4 pixels right and down
 			if (!client.isResized())
 			{
-				minX += 4;
-				minY += 4;
-				maxX += 4;
-				maxY += 4;
+				minX += client.getViewportXOffset();
+				minY += client.getViewportYOffset();
+				maxX += client.getViewportXOffset();
+				maxY += client.getViewportYOffset();
 			}
 
 			Rectangle clickableRect = new Rectangle(
 				minX - radius, minY - radius,
 				maxX - minX + radius, maxY - minY + radius
 			);
+
+			if (geometry.contains(clickableRect))
+			{
+				continue;
+			}
+
 			geometry.add(new Area(clickableRect));
 		}
 

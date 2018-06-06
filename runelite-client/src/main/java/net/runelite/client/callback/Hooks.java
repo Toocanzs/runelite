@@ -453,10 +453,6 @@ public class Hooks
 		shouldProcessGameTick = true;
 	}
 
-	public static void onSetCombatInfo(Actor actor, int combatInfoId, int gameCycle, int var3, int var4, int healthRatio, int health)
-	{
-	}
-
 	public static void postItemComposition(ItemComposition itemComposition)
 	{
 		PostItemComposition event = new PostItemComposition();
