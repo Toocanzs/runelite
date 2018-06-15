@@ -24,12 +24,22 @@
  */
 package net.runelite.client.plugins.tileindicators;
 
+import com.google.common.eventbus.Subscribe;
 import com.google.inject.Provides;
 import javax.inject.Inject;
+
+import lombok.Getter;
+import net.runelite.api.Actor;
+import net.runelite.api.NPC;
+import net.runelite.api.Query;
+import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.queries.NPCQuery;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.QueryRunner;
 
 @PluginDescriptor(
 	name = "Tile Indicators",
@@ -42,6 +52,9 @@ public class TileIndicatorsPlugin extends Plugin
 
 	@Inject
 	private TileIndicatorsOverlay overlay;
+
+	@Getter
+	private int tektonTicks = 3;
 
 	@Provides
 	TileIndicatorsConfig provideConfig(ConfigManager configManager)
@@ -59,5 +72,48 @@ public class TileIndicatorsPlugin extends Plugin
 	protected void shutDown() throws Exception
 	{
 		overlayManager.remove(overlay);
+	}
+
+	private int ticks = 0;
+	@Subscribe
+	public void onTick(GameTick gameTick)
+	{
+		ticks++;
+		if (tektonTicks > 0)
+			tektonTicks--;
+	}
+
+	@Inject
+	private QueryRunner queryRunner;
+
+	public NPC getTekton()
+	{
+		Query npcQuery = new NPCQuery().nameContains("Tekton");
+		NPC[] result = queryRunner.runQuery(npcQuery);
+		return result.length >= 1 ? result[0] : null;
+	}
+
+	private void resetTektonAttackTimer()
+	{
+		tektonTicks = 3;
+	}
+
+	@Subscribe
+	public void onAnimation(AnimationChanged animationChanged)
+	{
+		if (animationChanged.getActor() != null)
+		{
+			Actor actor = animationChanged.getActor();
+			if (actor.getName() != null && actor.getName().toLowerCase().contains("tekton"))
+			{
+				for (TektonAnimation tektonAnimation : TektonAnimation.values())
+				{
+					if (actor.getAnimation() == tektonAnimation.animID)
+					{
+						resetTektonAttackTimer();
+					}
+				}
+			}
+		}
 	}
 }
