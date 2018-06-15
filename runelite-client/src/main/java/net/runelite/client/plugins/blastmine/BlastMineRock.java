@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Adam <Adam@sigterm.info>
+ * Copyright (c) 2018, Unmoon <https://github.com/Unmoon>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,23 +22,41 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.api.events;
+package net.runelite.client.plugins.blastmine;
 
-import lombok.Data;
-import net.runelite.api.Client;
+import java.time.Duration;
+import java.time.Instant;
+import lombok.Getter;
+import net.runelite.api.GameObject;
 
-/**
- * An event where a map region has been modified.
- * <p>
- * This event exposes the index into the map that is changing,
- * the value of which can be obtained by using the index with
- * the {@link Client#getMapRegions()} array.
- */
-@Data
-public class MapRegionChanged
+class BlastMineRock
 {
-	/**
-	 * The map region index.
-	 */
-	private int index;
+	private static final Duration PLANT_TIME = Duration.ofSeconds(30);
+	private static final Duration FUSE_TIME = Duration.ofMillis(4200);
+
+	@Getter
+	private final GameObject gameObject;
+
+	@Getter
+	private final BlastMineRockType type;
+
+	private final Instant creationTime = Instant.now();
+
+	BlastMineRock(final GameObject gameObject, BlastMineRockType blastMineRockType)
+	{
+		this.gameObject = gameObject;
+		this.type = blastMineRockType;
+	}
+
+	double getRemainingFuseTimeRelative()
+	{
+		Duration duration = Duration.between(creationTime, Instant.now());
+		return duration.compareTo(FUSE_TIME) < 0 ? (double) duration.toMillis() / FUSE_TIME.toMillis() : 1;
+	}
+
+	double getRemainingTimeRelative()
+	{
+		Duration duration = Duration.between(creationTime, Instant.now());
+		return duration.compareTo(PLANT_TIME) < 0 ? (double) duration.toMillis() / PLANT_TIME.toMillis() : 1;
+	}
 }
