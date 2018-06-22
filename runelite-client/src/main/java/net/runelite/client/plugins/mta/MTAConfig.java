@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Tomas Slusny <slusnucky@gmail.com>
+ * Copyright (c) 2018, Jasper Ketelaar <Jasper0781@gmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,41 +22,60 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.client.plugins.prayer;
+package net.runelite.client.plugins.mta;
 
-import java.util.HashMap;
-import java.util.Map;
-import net.runelite.api.ItemID;
+import net.runelite.client.config.Config;
+import net.runelite.client.config.ConfigGroup;
+import net.runelite.client.config.ConfigItem;
 
-enum PrayerRestoreType
+@ConfigGroup(
+	keyName = "mta",
+	name = "Mage Training Arena",
+	description = "Configuration for the Mage Training Arena plugin"
+)
+public interface MTAConfig extends Config
 {
-	RESTOREPOT(ItemID.SUPER_RESTORE4, ItemID.SUPER_RESTORE3, ItemID.SUPER_RESTORE2, ItemID.SUPER_RESTORE1),
-	PRAYERPOT(ItemID.PRAYER_POTION4, ItemID.PRAYER_POTION3, ItemID.PRAYER_POTION2, ItemID.PRAYER_POTION1),
-	HOLYWRENCH(ItemID.PRAYER_CAPE, ItemID.PRAYER_CAPET, ItemID.PRAYER_CAPE_10643, ItemID.MAX_CAPE, ItemID.MAX_CAPE_13282,
-		ItemID.MAX_CAPE_13342, ItemID.HOLY_WRENCH, ItemID.RING_OF_THE_GODS_I);
-
-	private static final Map<Integer, PrayerRestoreType> prayerRestores = new HashMap<>();
-
-	private final int[] items;
-
-	PrayerRestoreType(int... items)
+	@ConfigItem(
+		keyName = "alchemy",
+		name = "Enable alchemy room",
+		description = "Configures whether or not the alchemy room overlay is enabled.",
+		position = 0
+	)
+	default boolean alchemy()
 	{
-		this.items = items;
+		return true;
 	}
 
-	static
+	@ConfigItem(
+		keyName = "graveyard",
+		name = "Enable graveyard room",
+		description = "Configures whether or not the graveyard room overlay is enabled.",
+		position = 1
+	)
+	default boolean graveyard()
 	{
-		for (PrayerRestoreType prayerRestoreType : values())
-		{
-			for (int itemId : prayerRestoreType.items)
-			{
-				prayerRestores.put(itemId, prayerRestoreType);
-			}
-		}
+		return true;
 	}
 
-	static PrayerRestoreType getType(final int itemId)
+	@ConfigItem(
+		keyName = "telekinetic",
+		name = "Enable telekinetic room",
+		description = "Configures whether or not the telekinetic room overlay is enabled.",
+		position = 2
+	)
+	default boolean telekinetic()
 	{
-		return prayerRestores.get(itemId);
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "enchantment",
+		name = "Enable enchantment room",
+		description = "Configures whether or not the enchantment room overlay is enabled.",
+		position = 3
+	)
+	default boolean enchantment()
+	{
+		return true;
 	}
 }
