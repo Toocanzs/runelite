@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Tomas Slusny <slusnucky@gmail.com>
+ * Copyright (c) 2018 Abex
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,41 +22,53 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.client.plugins.prayer;
+package net.runelite.client.util;
 
-import java.util.HashMap;
-import java.util.Map;
-import net.runelite.api.ItemID;
+import java.awt.event.KeyEvent;
+import java.util.function.Supplier;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+import net.runelite.client.config.Keybind;
+import net.runelite.client.input.KeyListener;
 
-enum PrayerRestoreType
+@RequiredArgsConstructor
+public abstract class HotkeyListener implements KeyListener
 {
-	RESTOREPOT(ItemID.SUPER_RESTORE4, ItemID.SUPER_RESTORE3, ItemID.SUPER_RESTORE2, ItemID.SUPER_RESTORE1),
-	PRAYERPOT(ItemID.PRAYER_POTION4, ItemID.PRAYER_POTION3, ItemID.PRAYER_POTION2, ItemID.PRAYER_POTION1),
-	HOLYWRENCH(ItemID.PRAYER_CAPE, ItemID.PRAYER_CAPET, ItemID.PRAYER_CAPE_10643, ItemID.MAX_CAPE, ItemID.MAX_CAPE_13282,
-		ItemID.MAX_CAPE_13342, ItemID.HOLY_WRENCH, ItemID.RING_OF_THE_GODS_I);
+	private final Supplier<Keybind> keybind;
 
-	private static final Map<Integer, PrayerRestoreType> prayerRestores = new HashMap<>();
+	@Getter
+	private boolean isPressed = false;
 
-	private final int[] items;
-
-	PrayerRestoreType(int... items)
+	@Override
+	public void keyTyped(KeyEvent e)
 	{
-		this.items = items;
 	}
 
-	static
+	@Override
+	public void keyPressed(KeyEvent e)
 	{
-		for (PrayerRestoreType prayerRestoreType : values())
+		if (keybind.get().matches(e))
 		{
-			for (int itemId : prayerRestoreType.items)
-			{
-				prayerRestores.put(itemId, prayerRestoreType);
-			}
+			isPressed = true;
+			hotkeyPressed();
 		}
 	}
 
-	static PrayerRestoreType getType(final int itemId)
+	@Override
+	public void keyReleased(KeyEvent e)
 	{
-		return prayerRestores.get(itemId);
+		if (keybind.get().matches(e))
+		{
+			isPressed = false;
+			hotkeyReleased();
+		}
+	}
+
+	public void hotkeyPressed()
+	{
+	}
+
+	public void hotkeyReleased()
+	{
 	}
 }
