@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, Adam <Adam@sigterm.info>
+ * Copyright (c) 2018, Jordan Atwood <jordan.atwood423@gmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,16 +22,26 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.mapping;
+package net.runelite.client.plugins.opponentinfo;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import net.runelite.client.config.Config;
+import net.runelite.client.config.ConfigGroup;
+import net.runelite.client.config.ConfigItem;
 
-@Retention(RetentionPolicy.RUNTIME)
-@Target(ElementType.TYPE)
-public @interface Implements
+@ConfigGroup(
+	keyName = "opponentinfo",
+	name = "Opponent Info",
+	description = "Configuration for the Opponent info plugin"
+)
+public interface OpponentInfoConfig extends Config
 {
-	String value();
+	@ConfigItem(
+		keyName = "lookupOnInteraction",
+		name = "Lookup players on interaction",
+		description = "Display a combat stat comparison panel on player interaction. (follow, trade, challenge, attack, etc.)"
+	)
+	default boolean lookupOnInteraction()
+	{
+		return false;
+	}
 }
