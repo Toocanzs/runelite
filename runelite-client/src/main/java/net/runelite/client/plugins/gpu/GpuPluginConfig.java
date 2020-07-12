@@ -108,4 +108,34 @@ public interface GpuPluginConfig extends Config
 	{
 		return true;
 	}
+
+	@Range(
+			min = 0,
+			max = 8
+	)
+	@ConfigItem(
+			keyName = "mipmapLevel",
+			name = "Mipmap Level",
+			description = "Configures the max mipmap level that will be used. 0 meaning no mipmapping. Mipmapping reduces aliasing of textures at large distances. Use in combination with anisotropic filtering for the best effect",
+			position = 7
+	)
+	default int mipmapLevel()
+	{
+		return 0;
+	}
+
+	@Range(
+			min = 1,
+			max = 16
+	)
+	@ConfigItem(
+			keyName = "anisotropicLevel",
+			name = "Anisotropic Filtering Level",
+			description = "Configures the level of anisotropic filtering. Anisotropic filtering reduces aliasing of textures and also reduces blurriness at large distances when using mipmapping. Use in combination with mipmapping for the best effect.",
+			position = 8
+	)
+	default int anisotropicLevel()
+	{
+		return 1;
+	}
 }

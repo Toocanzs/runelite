@@ -243,6 +243,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int lastStretchedCanvasWidth;
 	private int lastStretchedCanvasHeight;
 	private AntiAliasingMode lastAntiAliasingMode;
+	private int lastMipmapLevel = -1;
+	private int lastAnisoLevel;
 
 	private int centerX;
 	private int centerY;
@@ -1089,6 +1091,18 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				gl.glDispatchCompute(largeModels, 1, 1);
 
 				gl.glMemoryBarrier(gl.GL_SHADER_STORAGE_BARRIER_BIT);
+			}
+
+			if(textureArrayId != -1 && config.mipmapLevel() != lastMipmapLevel)
+			{
+				textureManager.setMipmapLevel(textureArrayId, config.mipmapLevel(), gl);
+				lastMipmapLevel = config.mipmapLevel();
+			}
+
+			if(textureArrayId != -1 && config.anisotropicLevel() != lastAnisoLevel)
+			{
+				textureManager.setAnisotropicFilteringLevel(textureArrayId, config.anisotropicLevel(), gl);
+				lastAnisoLevel = config.anisotropicLevel();
 			}
 
 			if (textureArrayId == -1)

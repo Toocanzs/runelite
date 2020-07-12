@@ -51,9 +51,9 @@ class TextureManager
 
 		int textureArrayId = GLUtil.glGenTexture(gl);
 		gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
-		gl.glTexStorage3D(gl.GL_TEXTURE_2D_ARRAY, 1, gl.GL_RGBA8, TEXTURE_SIZE, TEXTURE_SIZE, textures.length);
+		gl.glTexStorage3D(gl.GL_TEXTURE_2D_ARRAY, 8, gl.GL_RGBA8, TEXTURE_SIZE, TEXTURE_SIZE, textures.length);
 
-		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST);
+		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST_MIPMAP_LINEAR);
 		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST);
 
 		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE);
@@ -68,9 +68,23 @@ class TextureManager
 
 		gl.glActiveTexture(gl.GL_TEXTURE1);
 		gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
+		gl.glGenerateTextureMipmap(textureArrayId);
+		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_BASE_LEVEL, 0);
 		gl.glActiveTexture(gl.GL_TEXTURE0);
 
 		return textureArrayId;
+	}
+
+	void setMipmapLevel(int textureArrayId, int level, GL4 gl)
+	{
+		gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
+		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAX_LEVEL, level);
+	}
+
+	void setAnisotropicFilteringLevel(int textureArrayId, int level, GL4 gl)
+	{
+		gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
+		gl.glTexParameterf(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAX_ANISOTROPY_EXT, level);
 	}
 
 	void freeTextureArray(GL4 gl, int textureArrayId)
