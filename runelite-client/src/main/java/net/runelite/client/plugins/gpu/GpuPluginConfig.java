@@ -125,7 +125,7 @@ public interface GpuPluginConfig extends Config
 	}
 
 	@Range(
-			min = 1,
+			min = 0,
 			max = 16
 	)
 	@ConfigItem(

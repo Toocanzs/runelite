@@ -68,7 +68,7 @@ class TextureManager
 
 		gl.glActiveTexture(gl.GL_TEXTURE1);
 		gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
-		gl.glGenerateTextureMipmap(textureArrayId);
+		gl.glGenerateMipmap(gl.GL_TEXTURE_2D_ARRAY);
 		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_BASE_LEVEL, 0);
 		gl.glActiveTexture(gl.GL_TEXTURE0);
 
@@ -81,10 +81,15 @@ class TextureManager
 		gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAX_LEVEL, level);
 	}
 
-	void setAnisotropicFilteringLevel(int textureArrayId, int level, GL4 gl)
+	void setAnisotropicFilteringLevel(int textureArrayId, float level, GL4 gl)
 	{
-		gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
-		gl.glTexParameterf(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAX_ANISOTROPY_EXT, level);
+		final boolean supportsAniso = gl.isExtensionAvailable("GL_EXT_texture_filter_anisotropic");
+		if (supportsAniso)
+		{
+			final float maxSamples = GLUtil.glGetFloat(gl, gl.GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+			gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, textureArrayId);
+			gl.glTexParameterf(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAX_ANISOTROPY_EXT, Math.min(level, maxSamples));
+		}
 	}
 
 	void freeTextureArray(GL4 gl, int textureArrayId)
