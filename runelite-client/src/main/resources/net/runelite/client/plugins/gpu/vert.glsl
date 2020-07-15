@@ -26,6 +26,8 @@
 #version 330
 
 #define TILE_SIZE 128
+#define PI 3.1415926535897932384626433832795f
+#define UNIT PI / 1024.0f
 
 #define FOG_SCENE_EDGE_MIN TILE_SIZE
 #define FOG_SCENE_EDGE_MAX (103 * TILE_SIZE)
@@ -51,13 +53,14 @@ uniform float brightness;
 uniform int useFog;
 uniform int fogDepth;
 uniform int drawDistance;
+uniform mat4 projectionMatrix;
 
-out ivec3 vPosition;
-out vec4 vColor;
-out float vHsl;
-out vec4 vUv;
-out float vFogAmount;
+out vec4 Color;
+out float fHsl;
+out vec4 fUv;
+out float fogAmount;
 
+#include to_screen.glsl
 #include hsl_to_rgb.glsl
 
 float fogFactorLinear(const float dist, const float start, const float end) {
@@ -73,10 +76,18 @@ void main()
 
   vec3 rgb = hslToRgb(hsl);
 
-  vPosition = vertex;
-  vColor = vec4(rgb, 1.f - a);
-  vHsl = float(hsl);
-  vUv = uv;
+  ivec3 cameraPos = ivec3(cameraX, cameraY, cameraZ);
+  vec3 screenPos = toScreen(VertexPosition.xyz - cameraPos, cameraYaw, cameraPitch, centerX, centerY, zoom);
+  gl_Position = projectionMatrix * vec4(screenPos, 1.0);
+  // the client does not draw a triangle if any vertex distance is <50
+  if (-screenPos.z < 50) {
+    // Place this vertex behind the near clip plane so it will be clipped
+    gl_Position = vec4(0,0,0,-1);
+  }
+
+  Color = vec4(rgb, 1.f - a);
+  fHsl = float(hsl);
+  fUv = uv;
 
   int fogWest = max(FOG_SCENE_EDGE_MIN, cameraX - drawDistance);
   int fogEast = min(FOG_SCENE_EDGE_MAX, cameraX + drawDistance - TILE_SIZE);
@@ -92,5 +103,5 @@ void main()
       max(0, (nearestEdgeDistance + FOG_CORNER_ROUNDING_SQUARED) /
              (secondNearestEdgeDistance + FOG_CORNER_ROUNDING_SQUARED));
 
-  vFogAmount = fogFactorLinear(fogDistance, 0, fogDepth * TILE_SIZE) * useFog;
+  fogAmount = fogFactorLinear(fogDistance, 0, fogDepth * TILE_SIZE) * useFog;
 }
