@@ -261,11 +261,15 @@ void sort_and_insert(uint localId, modelinfo minfo, int thisPriority, int thisDi
         ++myOffset;
       }
     }
+    ivec4 A = pos + thisrvA;
+    ivec4 B = pos + thisrvB;
+    ivec4 C = pos + thisrvC;
+    keep_culled_verts_together(A,B,C);
 
     // position vertices in scene and write to out buffer
-    vout[outOffset + myOffset * 3]     = pos + thisrvA;
-    vout[outOffset + myOffset * 3 + 1] = pos + thisrvB;
-    vout[outOffset + myOffset * 3 + 2] = pos + thisrvC;
+    vout[outOffset + myOffset * 3]     = A;
+    vout[outOffset + myOffset * 3 + 1] = B;
+    vout[outOffset + myOffset * 3 + 2] = C;
 
     if (uvOffset < 0) {
       uvout[outOffset + myOffset * 3]     = vec4(0, 0, 0, 0);

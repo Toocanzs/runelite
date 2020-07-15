@@ -79,8 +79,8 @@ void main()
   ivec3 cameraPos = ivec3(cameraX, cameraY, cameraZ);
   vec3 screenPos = toScreen(VertexPosition.xyz - cameraPos, cameraYaw, cameraPitch, centerX, centerY, zoom);
   gl_Position = projectionMatrix * vec4(screenPos, 1.0);
-  // the client does not draw a triangle if any vertex distance is <50
-  if (-screenPos.z < 50) {
+  // culled verts will be set to 0,0,0,0 in the compute shader
+  if (VertexPosition == ivec4(0,0,0,0)) {
     // Place this vertex behind the near clip plane so it will be clipped
     gl_Position = vec4(0,0,0,-1);
   }

@@ -64,19 +64,27 @@ int face_distance(ivec4 vA, ivec4 vB, ivec4 vC, int cameraYaw, int cameraPitch) 
   return faceDistance;
 }
 
+void face_to_screen(ivec4 vA, ivec4 vB, ivec4 vC, out vec3 sA, out vec3 sB, out vec3 sC) {
+  ivec3 cameraPos = ivec3(cameraX, cameraY, cameraZ);
+  sA = toScreen(vA.xyz - cameraPos, cameraYaw, cameraPitch, centerX, centerY, zoom);
+  sB = toScreen(vB.xyz - cameraPos, cameraYaw, cameraPitch, centerX, centerY, zoom);
+  sC = toScreen(vC.xyz - cameraPos, cameraYaw, cameraPitch, centerX, centerY, zoom);
+}
+
 /*
  * Test if a face is visible (not backward facing)
  */
 bool face_visible(ivec4 vA, ivec4 vB, ivec4 vC, ivec4 position) {
-  // Move model to scene location, and account for camera offset
-  ivec4 cameraPos = ivec4(cameraX, cameraY, cameraZ, 0);
-  vA += position - cameraPos;
-  vB += position - cameraPos;
-  vC += position - cameraPos;
-
-  vec3 sA = toScreen(vA.xyz, cameraYaw, cameraPitch, centerX, centerY, zoom);
-  vec3 sB = toScreen(vB.xyz, cameraYaw, cameraPitch, centerX, centerY, zoom);
-  vec3 sC = toScreen(vC.xyz, cameraYaw, cameraPitch, centerX, centerY, zoom);
-
+  vec3 sA, sB, sC;
+  face_to_screen(vA + position, vB + position, vC + position, sA, sB, sC);
   return (sA.x - sB.x) * (sC.y - sB.y) - (sC.x - sB.x) * (sA.y - sB.y) > 0;
+}
+
+void keep_culled_verts_together(inout ivec4 A, inout ivec4 B, inout ivec4 C) {
+  vec3 sA, sB, sC;
+  face_to_screen(A, B, C, sA, sB, sC);
+  if (-sA.z < 50 || -sB.z < 50 || -sC.z < 50) {
+    //Make sure all the vertices share the same position so these vertices can be culled later in the in the vertex shader
+    A = B = C = ivec4(0,0,0,0);
+  }
 }
