@@ -56,7 +56,7 @@ class SceneUploader
 	private Regions regions;
 
 	int sceneId = (int) System.nanoTime();
-	private int offset;
+	public int offset;
 	private int uvoffset;
 	private int uniqueModels;
 

@@ -263,6 +263,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniTexSourceDimensions;
 	private int uniTexTargetDimensions;
 	private int uniUiAlphaOverlay;
+	private int uniUiViewMatrix;
+	private int uniUiVertexCount;
+	private int uniUiBrightness;
+	private int uniUiAspectScaling;
+	private int uniUiCameraPosition;
 	private int uniTextures;
 	private int uniTextureAnimations;
 	private int uniBlockSmall;
@@ -629,6 +634,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		uniTexSourceDimensions = GL43C.glGetUniformLocation(glUiProgram, "sourceDimensions");
 		uniUiColorBlindMode = GL43C.glGetUniformLocation(glUiProgram, "colorBlindMode");
 		uniUiAlphaOverlay = GL43C.glGetUniformLocation(glUiProgram, "alphaOverlay");
+
+		uniUiViewMatrix = GL43C.glGetUniformLocation(glUiProgram, "viewMatrix");
+
+		uniUiVertexCount = GL43C.glGetUniformLocation(glUiProgram, "vertexCount");
+		uniUiBrightness = GL43C.glGetUniformLocation(glUiProgram, "brightness");
+		uniUiAspectScaling = GL43C.glGetUniformLocation(glUiProgram, "aspectScaling");
+		uniUiCameraPosition = GL43C.glGetUniformLocation(glUiProgram, "cameraPosition");
 
 		if (computeMode == ComputeMode.OPENGL)
 		{
@@ -1277,13 +1289,19 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				GL43C.glUniform1i(uniTick, client.getGameCycle());
 			}
 
-			// Calculate projection matrix
+			float[] modelMatrix = Mat4.identity();
+
+			float[] viewMatrix = Mat4.rotateX((float) -(Math.PI - cameraPitch));
+			Mat4.mul(viewMatrix, Mat4.rotateY((float) cameraYaw));
+			Mat4.mul(viewMatrix, Mat4.translate((float) -cameraX, (float) -cameraY, (float) -cameraZ));
+
 			float[] projectionMatrix = Mat4.scale(client.getScale(), client.getScale(), 1);
 			Mat4.mul(projectionMatrix, Mat4.projection(viewportWidth, viewportHeight, 50));
-			Mat4.mul(projectionMatrix, Mat4.rotateX((float) -(Math.PI - cameraPitch)));
-			Mat4.mul(projectionMatrix, Mat4.rotateY((float) cameraYaw));
-			Mat4.mul(projectionMatrix, Mat4.translate((float) -cameraX, (float) -cameraY, (float) -cameraZ));
-			GL43C.glUniformMatrix4fv(uniProjectionMatrix, false, projectionMatrix);
+
+			float[] mvp = projectionMatrix.clone();
+			Mat4.mul(mvp, viewMatrix);
+			Mat4.mul(mvp, modelMatrix);
+			GL43C.glUniformMatrix4fv(uniProjectionMatrix, false, mvp);
 
 			// Bind uniforms
 			GL43C.glUniformBlockBinding(glProgram, uniBlockMain, 0);
@@ -1351,6 +1369,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindFramebuffer(GL43C.GL_READ_FRAMEBUFFER, awtContext.getFramebuffer(false));
 		}
 
+		int vertexCount = targetBufferOffset; // NOTE: 4 from is vA,vB,vC,alphaPrioritycolor
+
+		// Texture on UI
+		drawUi(overlayColor, canvasHeight, canvasWidth, vertexCount);
+
 		vertexBuffer.clear();
 		uvBuffer.clear();
 		modelBuffer.clear();
@@ -1360,9 +1383,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		smallModels = largeModels = unorderedModels = 0;
 		tempOffset = 0;
 		tempUvOffset = 0;
-
-		// Texture on UI
-		drawUi(overlayColor, canvasHeight, canvasWidth);
 
 		try
 		{
@@ -1387,7 +1407,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		checkGLErrors();
 	}
 
-	private void drawUi(final int overlayColor, final int canvasHeight, final int canvasWidth)
+	private void drawUi(final int overlayColor, final int canvasHeight, final int canvasWidth, final int vertexCount)
 	{
 		GL43C.glEnable(GL43C.GL_BLEND);
 		GL43C.glBlendFunc(GL43C.GL_ONE, GL43C.GL_ONE_MINUS_SRC_ALPHA);
@@ -1429,6 +1449,30 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glTexParameteri(GL43C.GL_TEXTURE_2D, GL43C.GL_TEXTURE_MIN_FILTER, function);
 			GL43C.glTexParameteri(GL43C.GL_TEXTURE_2D, GL43C.GL_TEXTURE_MAG_FILTER, function);
 		}
+
+
+
+		float[] viewMatrix = Mat4.rotateX((float) -(Math.PI - cameraPitch));
+		Mat4.mul(viewMatrix, Mat4.rotateY((float) cameraYaw));
+		Mat4.mul(viewMatrix, Mat4.translate((float) -cameraX, (float) -cameraY, (float) -cameraZ));
+
+		//float[] projectionMatrix = Mat4.scale(client.getScale(), client.getScale(), 1);
+		//Mat4.mul(projectionMatrix, Mat4.projection(client.getViewportWidth(), client.getViewportHeight(), 50));
+
+		float aspectX = (float) client.getViewportWidth() / client.getScale();
+		float aspectY = (float) client.getViewportHeight() / client.getScale();
+
+		GL43C.glUniform2f(uniUiAspectScaling, aspectX, aspectY);
+
+		GL43C.glUniformMatrix4fv(uniUiViewMatrix, false, viewMatrix);
+		//GL43C.glUniformMatrix4fv(uniUiProjection, false, projectionMatrix);
+
+		TextureProvider textureProvider = client.getTextureProvider();
+		GL43C.glUniform1f(uniUiBrightness, (float) textureProvider.getBrightness());
+		GL43C.glUniform1i(uniUiVertexCount, vertexCount);
+		GL43C.glUniform3f(uniUiCameraPosition, (float) cameraX, (float) cameraY, (float) cameraZ);
+
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpOutBuffer.glBufferId);
 
 		// Texture on UI
 		GL43C.glBindVertexArray(vaoUiHandle);
