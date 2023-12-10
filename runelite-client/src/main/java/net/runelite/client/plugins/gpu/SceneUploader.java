@@ -60,6 +60,14 @@ class SceneUploader
 	private int uvoffset;
 	private int uniqueModels;
 
+	private int minX;
+	private int minY;
+	private int minZ;
+
+	private int maxX;
+	private int maxY;
+	private int maxZ;
+
 	@Inject
 	SceneUploader(
 		Client client,
@@ -88,6 +96,14 @@ class SceneUploader
 		vertexBuffer.clear();
 		uvBuffer.clear();
 
+		minX = Integer.MAX_VALUE;
+		minY = Integer.MAX_VALUE;
+		minZ = Integer.MAX_VALUE;
+
+		maxX = Integer.MIN_VALUE;
+		maxY = Integer.MIN_VALUE;
+		maxZ = Integer.MIN_VALUE;
+
 		Stopwatch stopwatch = Stopwatch.createStarted();
 		prepare(scene);
 		stopwatch.stop();
@@ -111,6 +127,63 @@ class SceneUploader
 
 		stopwatch.stop();
 		log.debug("Scene upload time: {} unique models: {} length: {}KB", stopwatch, uniqueModels, (offset * 16) / 1024);
+		System.out.println("minX=" + minX + " minY=" + minY + " minZ=" + minZ + "\nmaxX=" + maxX + " maxY=" + maxY + " maxZ=" + maxZ);
+		System.out.println("extentX="+(maxX-minX) + " extentY=" + (maxY-minY) + " extentZ="+ (maxZ-minZ));
+
+		int N = 256;
+		int[] rand = new int[N];
+
+		int[] source = rand;
+		int[] dest = rand.clone();
+
+		int bitsPerPass = 8;
+
+		int numBuckets = 1 << bitsPerPass;
+
+		int[] buckets = new int[numBuckets];
+
+		for (int bit = 0; bit < 32/bitsPerPass; bit++) {
+			for (int i = 0; i < numBuckets; i++) {
+				buckets[i] = 0;
+			}
+			// Count number of occurrences of the digit
+			for (int i = 0; i < N; i++) {
+				int digit = (source[i] >> (bit * bitsPerPass)) & (numBuckets - 1);
+				buckets[digit] += 1;
+			}
+
+			// Calculate the exclusive scan from the bucket counts
+			// This just means that
+			// [1,2,3,4]
+			// goes to
+			// [0, 1, 3, 6, 10]
+			// Giving us what index to start writing a digit at
+			int sum = 0;
+			for (int i = 0; i < numBuckets; i++) {
+				int count = buckets[i];
+				buckets[i] = sum;
+				sum += count;
+			}
+
+			for (int i = 0; i < N; i++) {
+				int digit = (source[i] >> (bit * bitsPerPass)) & (numBuckets - 1);
+				int index = buckets[digit];
+				// Note that this is increased so the next digit is written in the next position
+				buckets[digit] += 1;
+				dest[index] = source[i];
+			}
+
+			int[] temp = dest;
+			dest = source;
+			source = temp;
+		}
+
+		for (int i = 0; i < N-1; i++) {
+			if (source[i] > source[i + 1]) {
+				assert false : "Unsorted array";
+			}
+		}
+		System.out.println("sorted!");
 	}
 
 	private void upload(Scene scene, Tile tile, GpuIntBuffer vertexBuffer, GpuFloatBuffer uvBuffer)
@@ -229,6 +302,16 @@ class SceneUploader
 		}
 	}
 
+	void updateMinMax(int x, int y, int z) {
+		minX = Math.min(minX, x);
+		minY = Math.min(minY, y);
+		minZ = Math.min(minZ, z);
+
+		maxX = Math.max(maxX, x);
+		maxY = Math.max(maxY, y);
+		maxZ = Math.max(maxZ, z);
+	}
+
 	int upload(Scene scene, SceneTilePaint tile, int tileZ, int tileX, int tileY, GpuIntBuffer vertexBuffer, GpuFloatBuffer uvBuffer,
 		int offsetX, int offsetY, boolean padUvs)
 	{
@@ -280,6 +363,11 @@ class SceneUploader
 		int vertexBy = localY + Perspective.LOCAL_TILE_SIZE;
 		int vertexBz = nwHeight;
 		final int c4 = nwColor;
+
+		updateMinMax(vertexAx, vertexAy, vertexAz);
+		updateMinMax(vertexBx, vertexBy, vertexBz);
+		updateMinMax(vertexCx, vertexCy, vertexCz);
+		updateMinMax(vertexDx, vertexDy, vertexDz);
 
 		vertexBuffer.put(vertexAx, vertexAz, vertexAy, c3);
 		vertexBuffer.put(vertexBx, vertexBz, vertexBy, c4);
@@ -359,6 +447,10 @@ class SceneUploader
 			int vertexXC = vertexX[triangleC] - baseX;
 			int vertexYC = vertexY[triangleC];
 			int vertexZC = vertexZ[triangleC] - baseY;
+
+			updateMinMax(vertexXA, vertexYA, vertexZA);
+			updateMinMax(vertexXB, vertexYB, vertexZB);
+			updateMinMax(vertexXC, vertexYC, vertexZC);
 
 			vertexBuffer.put(vertexXA + offsetX, vertexYA, vertexZA + offsetZ, colorA);
 			vertexBuffer.put(vertexXB + offsetX, vertexYB, vertexZB + offsetZ, colorB);
@@ -496,6 +588,10 @@ class SceneUploader
 			int triangleA = indices1[face];
 			int triangleB = indices2[face];
 			int triangleC = indices3[face];
+
+			updateMinMax(vertexX[triangleA], vertexY[triangleA], vertexZ[triangleA]);
+			updateMinMax(vertexX[triangleB], vertexY[triangleB], vertexZ[triangleB]);
+			updateMinMax(vertexX[triangleC], vertexY[triangleC], vertexZ[triangleC]);
 
 			vertexBuffer.put(vertexX[triangleA], vertexY[triangleA], vertexZ[triangleA], packAlphaPriority | color1);
 			vertexBuffer.put(vertexX[triangleB], vertexY[triangleB], vertexZ[triangleB], packAlphaPriority | color2);
@@ -970,6 +1066,10 @@ class SceneUploader
 				color3 = interpolateHSL(color3, overrideHue, overrideSat, overrideLum, overrideAmount);
 			}
 		}
+
+		updateMinMax(modelLocalX[triangleA], modelLocalY[triangleA], modelLocalZ[triangleA]);
+		updateMinMax(modelLocalX[triangleB], modelLocalY[triangleB], modelLocalZ[triangleB]);
+		updateMinMax(modelLocalX[triangleC], modelLocalY[triangleC], modelLocalZ[triangleC]);
 
 		vertexBuffer.put(modelLocalX[triangleA], modelLocalY[triangleA], modelLocalZ[triangleA], packAlphaPriority | color1);
 		vertexBuffer.put(modelLocalX[triangleB], modelLocalY[triangleB], modelLocalZ[triangleB], packAlphaPriority | color2);
