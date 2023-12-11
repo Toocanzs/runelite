@@ -620,7 +620,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			Random random = new Random();
 			random.setSeed(42);
 			for (int i = 0; i < N; i++) {
-				arr[i] = Math.abs(random.nextInt()) % 255;
+				arr[i] = (N-i-1) % 20;
+				//arr[i] = Math.abs(random.nextInt()) % 255;
 			}
 /*
 			// Iterate over the array from the end to the beginning
@@ -650,10 +651,15 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, group_sums);
 			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, groupSums, GL43C.GL_DYNAMIC_DRAW);
 
+			int globalBuckets = GL43C.glGenBuffers();
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, globalBuckets);
+			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, (1<<8)*4, GL43C.GL_DYNAMIC_DRAW);
+
 			GL43C.glUseProgram(glSortComputeProgram);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, arr_buffer);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, temp_buffer);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, group_sums);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, globalBuckets);
 
 			int uNumItems = GL43C.glGetUniformLocation(glSortComputeProgram, "numItems");
 
@@ -663,7 +669,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 			int[] result = new int[N];
-			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, temp_buffer);
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, arr_buffer);
 			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, result);
 
 			for (int i = 0; i < N; i++) {

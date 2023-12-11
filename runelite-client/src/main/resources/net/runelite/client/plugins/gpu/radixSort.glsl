@@ -4,24 +4,15 @@
 #define BITS_PER_PASS 8
 #define NUM_BUCKETS (1 << BITS_PER_PASS)
 
-shared int localBuckets[NUM_BUCKETS];
-
 uniform int numItems;
 
 layout(std430, binding = 0) buffer _arr {
   int arr[];
 };
 
-layout(std430, binding = 1) buffer _temp {
-  int temp_arr[];
+layout(std430, binding = 3) buffer _globalBuckets {
+  int globalBuckets[];
 };
-
-layout(std430, binding = 2) buffer _groupSums {
-  int groupSums[];
-};
-
-#define GET_DATA(x) (pullFromArr ? arr[(x)] : temp_arr[(x)])
-#define STORE_DATA(x, y) if (pullFromArr) temp_arr[(x)] = (y); else arr[(x)] = (y);
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
@@ -29,59 +20,72 @@ void main() {
     if (gl_GlobalInvocationID.x < numItems) {
         /*for (int bit = 0; bit < 32/BITS_PER_PASS; bit++)*/
         int bit = 0; {
-            // Set counts to 0
-            localBuckets[gl_LocalInvocationID.x] = 0;
+            globalBuckets[gl_LocalInvocationID.x] = 0;
         
-            memoryBarrierShared();
+            memoryBarrier();
             barrier();
 
             // Count number of occurrences of the digit
-            int digit = (GET_DATA(gl_GlobalInvocationID.x) >> (bit * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-            atomicAdd(localBuckets[digit], 1);
+            int digit = (arr[gl_GlobalInvocationID.x] >> (bit * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
+            atomicAdd(globalBuckets[digit], 1);
 
-            memoryBarrierShared(); // TODO: Remove. for loop has one
+            memoryBarrier();
             barrier();
 
             // Convert the buckets to an inlcusive prefix sum
             // Which gives us the offset to start writing that digit at
-            for (int stride = 1; stride < THREAD_COUNT; stride *= 2) {
-                memoryBarrierShared();
-                barrier();
-                int temp = 0;
-                if (gl_LocalInvocationID.x >= stride) {
-                    temp = localBuckets[gl_LocalInvocationID.x - stride];
+            if (gl_WorkGroupID.x == 0) {
+                for (int stride = 1; stride < NUM_BUCKETS; stride *= 2) {
+                    memoryBarrier();
+                    barrier();
+                    int temp = 0;
+                    if (gl_LocalInvocationID.x >= stride) {
+                        temp = globalBuckets[gl_LocalInvocationID.x - stride];
+                    }
+                    memoryBarrier();
+                    barrier();
+                    atomicAdd(globalBuckets[gl_LocalInvocationID.x], temp);
                 }
-                memoryBarrierShared();
+            }
+
+            memoryBarrier();
+            barrier();
+
+            if (gl_WorkGroupID.x == 0) {
+                // Convert from inclusive to exclusive prefix sum by shifting to the right and inserting zero at beginning
+                int value = 0;
+                if (gl_LocalInvocationID.x > 0) {
+                    value = globalBuckets[gl_LocalInvocationID.x - 1];
+                }
+
+                memoryBarrier(); // TODO: Not needed cause single work group?
                 barrier();
-                atomicAdd(localBuckets[gl_LocalInvocationID.x], temp);
+
+                globalBuckets[gl_LocalInvocationID.x] = value;
             }
 
-            memoryBarrierShared();
+            
+            memoryBarrier();
             barrier();
-
-            // Convert from inclusive to exclusive prefix sum by shifting to the right and inserting zero at beginning
-            if (localBuckets[gl_LocalInvocationID.x] > 0) {
-                localBuckets[gl_LocalInvocationID.x] = localBuckets[gl_LocalInvocationID.x - 1];
+            /*if (gl_GlobalInvocationID.x < NUM_BUCKETS) {
+                arr[gl_GlobalInvocationID.x] = globalBuckets[gl_GlobalInvocationID.x];
             } else {
-                localBuckets[gl_LocalInvocationID.x] = 0;
+                arr[gl_GlobalInvocationID.x] = -1;
             }
-
-            memoryBarrierShared();
-            barrier();
-
-            uint previousGroupSum = gl_WorkGroupID.x * gl_WorkGroupSize.x; // Counting digits for an array of size N will always produce N as the group count
-            localBuckets[gl_LocalInvocationID.x] += int(previousGroupSum);
-
-            memoryBarrierShared();
-            barrier();
+            return;/*/
 
             // Note: We add the previous work group's sum to the local sums, making them now a global exclusive scan
-            uint index = atomicAdd(localBuckets[digit], 1);
+            uint index = atomicAdd(globalBuckets[digit], 1);
 
-            int d = GET_DATA(gl_GlobalInvocationID.x);
-            STORE_DATA(index, d);
+            int d = arr[gl_GlobalInvocationID.x];
+            // TODO: Can't we just barrier here so everyone gets their data? then overwrite? Gets rid of the need for a temp buffer
 
-            memoryBarrier(); // Note we use a non-shared one because dest is global memory
+            memoryBarrier(); // Wait so everyone grabs the value they want to write, and then we write all at once after that so no one tramples over another thread's value
+            barrier();
+
+            arr[index] = d;
+
+            memoryBarrier();
             barrier();
 
             pullFromArr = !pullFromArr; // Swap buffers*/

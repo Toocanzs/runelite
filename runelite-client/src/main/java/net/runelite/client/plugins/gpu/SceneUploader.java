@@ -96,7 +96,6 @@ class SceneUploader
 		uniqueModels = 0;
 		vertexBuffer.clear();
 		uvBuffer.clear();
-
 		minX = Integer.MAX_VALUE;
 		minY = Integer.MAX_VALUE;
 		minZ = Integer.MAX_VALUE;
