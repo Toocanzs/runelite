@@ -38,6 +38,10 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Random;
 import javax.annotation.Nonnull;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
@@ -168,10 +172,14 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		.add(GL43C.GL_VERTEX_SHADER, "vertui.glsl")
 		.add(GL43C.GL_FRAGMENT_SHADER, "fragui.glsl");
 
+	static final Shader SORT_COMPUTE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "radixSort.glsl");
+
 	private int glProgram;
 	private int glComputeProgram;
 	private int glSmallComputeProgram;
 	private int glUnorderedComputeProgram;
+	private int glSortComputeProgram;
 	private int glUiProgram;
 
 	private int vaoCompute;
@@ -602,6 +610,75 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glComputeProgram = COMPUTE_PROGRAM.compile(createTemplate(1024, 6));
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
+
+			int N = 256;
+			int workGroupSize = 256;
+			int numWorkGroups = (N + workGroupSize - 1) / workGroupSize;
+			glSortComputeProgram = SORT_COMPUTE_PROGRAM.compile(createTemplate(workGroupSize, -1));
+
+			int[] arr = new int[N];
+			Random random = new Random();
+			random.setSeed(42);
+			for (int i = 0; i < N; i++) {
+				arr[i] = Math.abs(random.nextInt()) % 255;
+			}
+/*
+			// Iterate over the array from the end to the beginning
+			for (int i = arr.length - 1; i > 0; i--) {
+				// Generate a random index between 0 and i (inclusive)
+				int index = random.nextInt(i + 1);
+
+				// Swap the elements at index i and the randomly selected index
+				int temp = arr[i];
+				arr[i] = arr[index];
+				arr[index] = temp;
+
+				arr[i] = random.nextInt();
+			}
+*/
+			int arr_buffer = GL43C.glGenBuffers();
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, arr_buffer);
+			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, arr, GL43C.GL_DYNAMIC_DRAW);
+
+			int temp_buffer = GL43C.glGenBuffers();
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, temp_buffer);
+			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, arr, GL43C.GL_DYNAMIC_DRAW);
+
+			int[] groupSums = new int[numWorkGroups];
+
+			int group_sums = GL43C.glGenBuffers();
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, group_sums);
+			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, groupSums, GL43C.GL_DYNAMIC_DRAW);
+
+			GL43C.glUseProgram(glSortComputeProgram);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, arr_buffer);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, temp_buffer);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, group_sums);
+
+			int uNumItems = GL43C.glGetUniformLocation(glSortComputeProgram, "numItems");
+
+			GL43C.glUniform1i(uNumItems, N);
+
+			GL43C.glDispatchCompute(numWorkGroups, 1, 1);
+			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+			int[] result = new int[N];
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, temp_buffer);
+			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, result);
+
+			for (int i = 0; i < N; i++) {
+				System.out.println(arr[i] +" -> " +result[i]);
+			}
+
+			for (int i = 0; i < N-1; i++) {
+				if (result[i] > result[i+1]) {
+					System.out.println("UNSORTED!!!");
+				}
+			}
+
+			GL43C.glDeleteBuffers(arr_buffer);
+			GL43C.glDeleteBuffers(temp_buffer);
+			GL43C.glDeleteBuffers(group_sums);
 		}
 		else if (computeMode == ComputeMode.OPENCL)
 		{
@@ -662,6 +739,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glUnorderedComputeProgram);
 		glUnorderedComputeProgram = -1;
+
+		GL43C.glDeleteProgram(glSortComputeProgram);
+		glSortComputeProgram = -1;
 
 		GL43C.glDeleteProgram(glUiProgram);
 		glUiProgram = -1;

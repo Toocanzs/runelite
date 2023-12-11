@@ -27,6 +27,7 @@ package net.runelite.client.plugins.gpu;
 import com.google.common.base.Stopwatch;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
@@ -131,15 +132,125 @@ class SceneUploader
 		System.out.println("extentX="+(maxX-minX) + " extentY=" + (maxY-minY) + " extentZ="+ (maxZ-minZ));
 
 		int N = 256;
-		int[] rand = new int[N];
+		int[] source = new int[N];
 
-		int[] source = rand;
-		int[] dest = rand.clone();
+		for (int i = 0; i < N; i++) {
+			source[i] = (int) (Math.random() * (1<<30));
+		}
+
+		int[] dest = source.clone();
 
 		int bitsPerPass = 8;
-
 		int numBuckets = 1 << bitsPerPass;
 
+		int workGroupSize = 64;
+		int numWorkGroups = (N + workGroupSize - 1) / workGroupSize;
+
+		/*{
+			int[] test = new int[]{1, 2, 3, 4, 5};
+			int sum = 0;
+			for (int i = 0; i < test.length; i++) {
+				int blah = test[i];
+				test[i] = sum;
+				sum += blah;
+				System.out.print(test[i] + ",");
+			}
+			System.out.println();
+
+			int[] a = new int[]{0, 1, 2, 3, 4};
+
+			for (int stride = 1; stride < a.length; stride *= 2) {
+				int[] temps = new int[a.length]; // just a local variable
+				for (int i = 0; i < a.length; i++) {
+					if (i >= stride) {
+						temps[i] = a[i - stride];
+					}
+					else {
+						temps[i] = 0;
+					}
+				}
+				// barrier
+				for (int i = 0; i < a.length; i++) {
+					a[i] += temps[i];
+				}
+			}
+
+			for (int i = 0; i < test.length; i++) {
+				System.out.print(a[i] + ",");
+			}
+			System.out.println();
+		}
+		*/
+		/*
+		int[] groupSums = new int[numWorkGroups];
+
+		for (int workGroupId = 0; workGroupId < numWorkGroups; workGroupId++) {
+			AtomicInteger[] localBuckets = new AtomicInteger[numBuckets];
+			for (int i = 0; i < numBuckets; i++) localBuckets[i] = new AtomicInteger(0);
+
+			for (int bit = 0; bit < 32/bitsPerPass; bit++) {
+				for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+					localBuckets[localInvocationId].set(0);
+				}
+
+				// Barrier
+
+				for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+					int globalInvocationId = workGroupId * workGroupSize + localInvocationId;
+					// Count number of occurrences of the digit
+					int digit = (source[globalInvocationId] >> (bit * bitsPerPass)) & (numBuckets - 1);
+					localBuckets[digit].getAndAdd(1);
+				}
+
+				// Barrier
+				int groupSum = 0;
+				for (int stride = 1; stride < workGroupSize; stride *= 2) {
+					// barrier
+					int[] temps = new int[workGroupSize]; // just a local variable
+					for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+						int globalInvocationId = workGroupId * workGroupSize + localInvocationId;
+						if (localInvocationId >= stride) {
+							temps[localInvocationId] = source[globalInvocationId - stride];
+						}
+						else {
+							temps[localInvocationId] = 0;
+						}
+					}
+					// barrier
+					for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+						int toAdd = temps[localInvocationId];
+						localBuckets[localInvocationId].getAndAdd(toAdd);
+						groupSum += toAdd;
+					}
+				}
+				// barrier
+				// Write out group sums
+				for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+					if (localInvocationId == 0) { // One thread does the elected to write the group sum
+						groupSums[workGroupId] = groupSum;
+					}
+				}
+				// memory barrier
+				for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+					if (workGroupId >= 1) {
+						localBuckets[localInvocationId].addAndGet(groupSums[workGroupId - 1]);
+					}
+				}
+
+				for (int localInvocationId = 0; localInvocationId < workGroupSize; localInvocationId++) {
+					int globalInvocationId = workGroupId * workGroupSize + localInvocationId;
+					int digit = (source[globalInvocationId] >> (bit * bitsPerPass)) & (numBuckets - 1);
+					int index = localBuckets[digit].addAndGet(1);
+					dest[index] = source[localInvocationId];
+				}
+			}
+		}
+*/
+
+
+
+
+/*
 		int[] buckets = new int[numBuckets];
 
 		for (int bit = 0; bit < 32/bitsPerPass; bit++) {
@@ -176,14 +287,14 @@ class SceneUploader
 			int[] temp = dest;
 			dest = source;
 			source = temp;
-		}
+		}*/
 
-		for (int i = 0; i < N-1; i++) {
+		/*for (int i = 0; i < N-1; i++) {
 			if (source[i] > source[i + 1]) {
-				assert false : "Unsorted array";
+				System.out.println("!!!!!!!!!unsorted!!!!!!!");
 			}
 		}
-		System.out.println("sorted!");
+		System.out.println("sorted!");*/
 	}
 
 	private void upload(Scene scene, Tile tile, GpuIntBuffer vertexBuffer, GpuFloatBuffer uvBuffer)
