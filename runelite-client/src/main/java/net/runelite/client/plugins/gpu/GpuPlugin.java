@@ -611,7 +611,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			int N = 256;
+			int N = 512;
 			int workGroupSize = 256;
 			int numWorkGroups = (N + workGroupSize - 1) / workGroupSize;
 			glSortComputeProgram = SORT_COMPUTE_PROGRAM.compile(createTemplate(workGroupSize, -1));
@@ -620,8 +620,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			Random random = new Random();
 			random.setSeed(42);
 			for (int i = 0; i < N; i++) {
-				arr[i] = (N-i-1) % 20;
-				//arr[i] = Math.abs(random.nextInt()) % 255;
+				arr[i] = Math.abs(random.nextInt()) % 255;
 			}
 /*
 			// Iterate over the array from the end to the beginning
@@ -669,7 +668,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 			int[] result = new int[N];
-			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, arr_buffer);
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, temp_buffer);
 			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, result);
 
 			for (int i = 0; i < N; i++) {
