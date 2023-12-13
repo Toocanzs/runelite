@@ -33,7 +33,7 @@ void main() {
             keys[j] = key_i;
         }
     } else {
-        if (value_i <= value_j) {
+        if (value_i < value_j) {
             keys[i] = key_j;
             keys[j] = key_i;
         }
