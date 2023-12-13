@@ -170,9 +170,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		.add(GL43C.GL_FRAGMENT_SHADER, "fragui.glsl");
 
 	static final Shader BITONIC_SORT_PROGRAM = new Shader()
-			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/bitonic_sort.glsl");
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/bitonic/bitonic_sort.glsl");
 	static final Shader BITONIC_SETUP_PROGRAM = new Shader()
-			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/setup_keys_and_padding.glsl");
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/bitonic/setup_keys_and_padding.glsl");
+
+	static final Shader RADIX_TEST_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/radix/radix_sort.glsl");
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -180,6 +183,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glUnorderedComputeProgram;
 	private int glBitonicSortProgram;
 	private int glBitonicSetupProgram;
+	private int glRadixSortProgram;
 	private int glUiProgram;
 
 	private int vaoCompute;
@@ -621,72 +625,130 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			int _N = 123456;
-
-			int bitonicSortWorkGroupSize = 64;
-
-			glBitonicSortProgram = BITONIC_SORT_PROGRAM.compile(createTemplate(bitonicSortWorkGroupSize, -1));
-			glBitonicSetupProgram = BITONIC_SETUP_PROGRAM.compile(createTemplate(bitonicSortWorkGroupSize, -1));
+			int _N = 256;
 
 			int[] values = new int[_N];
 			Random random = new Random();
 			random.setSeed(42);
 			for (int i = 0; i < _N; i++) {
+				int r;
 				do {
-					values[i] = random.nextInt();
-				} while(values[i] < 0);
+					r = random.nextInt();
+				} while(r < 0);
+
+				values[i] = r;
 			}
 
-			// Bitonic sort requires power of two size arrays, so we pad until power of two
-			int paddedArraySize = nextPowerOf2(_N);
-
-			int keys_buffer = GL43C.glGenBuffers();
-			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
-			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, (long) 4 * paddedArraySize, GL43C.GL_DYNAMIC_DRAW); // NOTE: uninitialized padding will be filled in later
-			// NOTE: Keys are initialized by setup shader
-
-			int values_buffer = GL43C.glGenBuffers();
-			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, values_buffer);
-			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, (long) 4 * paddedArraySize, GL43C.GL_DYNAMIC_DRAW); // NOTE: uninitialized padding will be filled in later
-			GL43C.glBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values);
-
-			int uSetupUnpaddedItemCount = GL43C.glGetUniformLocation(glBitonicSetupProgram, "unpaddedItemCount");
-			int uSetupPaddedArraySize = GL43C.glGetUniformLocation(glBitonicSetupProgram, "paddedArraySize");
-
-			int uBitonicNumItems = GL43C.glGetUniformLocation(glBitonicSortProgram, "numItems");
-			int uBitonicDim = GL43C.glGetUniformLocation(glBitonicSortProgram, "dim");
-			int uBitonicBlock = GL43C.glGetUniformLocation(glBitonicSortProgram, "block");
-
 			int query_object = GL43C.glGenQueries();
-			{
-				GL43C.glBeginQuery(GL43C.GL_TIME_ELAPSED, query_object);
+			int keys_buffer = GL43C.glGenBuffers();
+			boolean useRadix = true;
 
+			if (useRadix) {
+				int radixWorkGroupSize = 256;
+				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 
-				// Run the setup program, setting up keys and filling padding values
-				GL43C.glUseProgram(glBitonicSetupProgram);
-				GL43C.glUniform1ui(uSetupUnpaddedItemCount, _N);
-				GL43C.glUniform1ui(uSetupPaddedArraySize, paddedArraySize);
-				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, keys_buffer);
-				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, values_buffer);
-				GL43C.glDispatchCompute((paddedArraySize + bitonicSortWorkGroupSize - 1) / bitonicSortWorkGroupSize, 1, 1);
+				int[] keys = new int[_N];
+				for (int i = 0; i < _N; i++) {
+					keys[i] = i;
+				}
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, keys, GL43C.GL_DYNAMIC_DRAW);
 
-				GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+				int values_buffer = GL43C.glGenBuffers();
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, values_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, values, GL43C.GL_DYNAMIC_DRAW);
 
-				GL43C.glUseProgram(glBitonicSortProgram);
-				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, keys_buffer);
-				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, values_buffer);
-				GL43C.glUniform1ui(uBitonicNumItems, paddedArraySize);
+				int temp_keys_buffer = GL43C.glGenBuffers();
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, temp_keys_buffer);
+				int[] blah = new int[_N];
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, blah, GL43C.GL_DYNAMIC_DRAW);
 
-				for (int dim = 2; dim <= paddedArraySize; dim <<= 1) {
-					GL43C.glUniform1ui(uBitonicDim, dim);
-					for (int block = dim >> 1; block > 0; block >>= 1) {
-						GL43C.glUniform1ui(uBitonicBlock, block);
-						GL43C.glDispatchCompute((paddedArraySize + bitonicSortWorkGroupSize - 1) / bitonicSortWorkGroupSize, 1, 1);
+				int uRadixNumItems = GL43C.glGetUniformLocation(glRadixSortProgram, "num_items");
+				int uRadixPassNumber = GL43C.glGetUniformLocation(glRadixSortProgram, "pass_number");
+
+				{
+					GL43C.glBeginQuery(GL43C.GL_TIME_ELAPSED, query_object);
+
+					GL43C.glUseProgram(glRadixSortProgram);
+					GL43C.glUniform1ui(uRadixNumItems, _N);
+
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
+					final int bitsPerPass = 4;
+					for (int pass_number = 0; pass_number < 32/bitsPerPass; pass_number++) {
+						GL43C.glUniform1ui(uRadixPassNumber, pass_number);
+						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
+						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, temp_keys_buffer);
+						GL43C.glDispatchCompute((_N + radixWorkGroupSize - 1) / radixWorkGroupSize, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+						int temp = keys_buffer;
+						keys_buffer = temp_keys_buffer;
+						temp_keys_buffer = temp;
 					}
+
+					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
 				}
 
-				GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
+				GL43C.glDeleteBuffers(values_buffer); // TODO: We wouldn't actually destroy this here
+				GL43C.glDeleteBuffers(temp_keys_buffer);
+			}
+			else { // bitonic sort
+				int bitonicSortWorkGroupSize = 64;
+
+				glBitonicSortProgram = BITONIC_SORT_PROGRAM.compile(createTemplate(bitonicSortWorkGroupSize, -1));
+				glBitonicSetupProgram = BITONIC_SETUP_PROGRAM.compile(createTemplate(bitonicSortWorkGroupSize, -1));
+
+				// Bitonic sort requires power of two size arrays, so we pad until power of two
+				int paddedArraySize = nextPowerOf2(_N);
+
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, (long) 4 * paddedArraySize, GL43C.GL_DYNAMIC_DRAW); // NOTE: uninitialized padding will be filled in later
+				// NOTE: Keys are initialized by setup shader
+
+				int values_buffer = GL43C.glGenBuffers();
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, values_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, (long) 4 * paddedArraySize, GL43C.GL_DYNAMIC_DRAW); // NOTE: uninitialized padding will be filled in later
+				GL43C.glBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values);
+
+				int uSetupUnpaddedItemCount = GL43C.glGetUniformLocation(glBitonicSetupProgram, "unpaddedItemCount");
+				int uSetupPaddedArraySize = GL43C.glGetUniformLocation(glBitonicSetupProgram, "paddedArraySize");
+
+				int uBitonicNumItems = GL43C.glGetUniformLocation(glBitonicSortProgram, "numItems");
+				int uBitonicDim = GL43C.glGetUniformLocation(glBitonicSortProgram, "dim");
+				int uBitonicBlock = GL43C.glGetUniformLocation(glBitonicSortProgram, "block");
+
+				{
+					GL43C.glBeginQuery(GL43C.GL_TIME_ELAPSED, query_object);
+
+
+					// Run the setup program, setting up keys and filling padding values
+					GL43C.glUseProgram(glBitonicSetupProgram);
+					GL43C.glUniform1ui(uSetupUnpaddedItemCount, _N);
+					GL43C.glUniform1ui(uSetupPaddedArraySize, paddedArraySize);
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, keys_buffer);
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, values_buffer);
+					GL43C.glDispatchCompute((paddedArraySize + bitonicSortWorkGroupSize - 1) / bitonicSortWorkGroupSize, 1, 1);
+
+					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+					GL43C.glUseProgram(glBitonicSortProgram);
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, keys_buffer);
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, values_buffer);
+					GL43C.glUniform1ui(uBitonicNumItems, paddedArraySize);
+
+					for (int dim = 2; dim <= paddedArraySize; dim <<= 1) {
+						GL43C.glUniform1ui(uBitonicDim, dim);
+						for (int block = dim >> 1; block > 0; block >>= 1) {
+							GL43C.glUniform1ui(uBitonicBlock, block);
+							GL43C.glDispatchCompute((paddedArraySize + bitonicSortWorkGroupSize - 1) / bitonicSortWorkGroupSize, 1, 1);
+							GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+						}
+					}
+
+					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
+				}
+
+				GL43C.glDeleteBuffers(values_buffer);
 			}
 
 			long[] result = new long[1];
@@ -697,19 +759,24 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
 			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, result_keys);
 
-			/*System.out.println("DATA:");
+			/*System.out.println("keys:");
+			for (int i = 0; i < _N; i++) {
+				System.out.println(result_keys[i]);
+			}*/
+
+			System.out.println("DATA:");
 			for (int i = 0; i < _N; i++) {
 				System.out.println(values[result_keys[i]]);
-			}*/
+			}
 
 			for (int i = 0; i < _N-1; i++) {
 				if (values[result_keys[i]] > values[result_keys[i+1]]) {
 					System.out.println("UNSORTED!!!");
+					break;
 				}
 			}
 
 			GL43C.glDeleteBuffers(keys_buffer);
-			GL43C.glDeleteBuffers(values_buffer);
 		}
 		else if (computeMode == ComputeMode.OPENCL)
 		{
@@ -773,6 +840,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glBitonicSortProgram);
 		glBitonicSortProgram = -1;
+
+		GL43C.glDeleteProgram(glRadixSortProgram);
+		glRadixSortProgram = -1;
 
 		GL43C.glDeleteProgram(glBitonicSetupProgram);
 		glBitonicSetupProgram = -1;

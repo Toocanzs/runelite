@@ -4,11 +4,11 @@
 uniform uint unpaddedItemCount;
 uniform uint paddedArraySize;
 
-layout(std430, binding = 0) buffer _keys {
+layout(std430, binding = 0) writeonly buffer _keys {
     uint keys[];
 };
 
-layout(std430, binding = 1) buffer _values {
+layout(std430, binding = 1) writeonly buffer _values {
     uint values[];
 };
 
