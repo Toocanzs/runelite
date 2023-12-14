@@ -7,15 +7,15 @@
 uniform uint num_items;
 uniform uint pass_number;
 
-layout(std430, binding = 0) readonly buffer _values {
+layout(std430, binding = 0) restrict readonly buffer _values {
   uint values[];
 };
 
-layout(std430, binding = 1) readonly buffer _source_keys {
+layout(std430, binding = 1) restrict readonly buffer _source_keys {
   uint source_keys[];
 };
 
-layout(std430, binding = 2) writeonly buffer _destination_keys {
+layout(std430, binding = 2) restrict writeonly buffer _destination_keys {
   uint destination_keys[];
 };
 
@@ -25,7 +25,6 @@ shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     if (gl_GlobalInvocationID.x < num_items) {
-
         digit_counts[gl_LocalInvocationID.x] = 0;
         for (int i = 0; i < THREAD_COUNT; i++) {
             digit_offsets[i][gl_LocalInvocationID.x] = 0;
@@ -89,15 +88,36 @@ void main() {
         // Exactly what we wanted.
 
         // For every bucket, compute an exclusive prefix sum across all elements
-        if (gl_LocalInvocationID.x < NUM_BUCKETS) {
-            uint sum = 0;
-            // We're doing the prefix sums as a braindead simple sequential loop because that turns out to be faster than any prefix sum calculated with multiple threads working together
-            for (int i = 0; i < THREAD_COUNT; i++) {
-                uint temp = digit_offsets[gl_LocalInvocationID.x][i];
-                digit_offsets[gl_LocalInvocationID.x][i] = sum;
-                sum += temp;
+        for (uint stride = 1; stride < THREAD_COUNT; stride <<= 1) {
+            uint values_to_add[NUM_BUCKETS];
+            for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
+                if (gl_LocalInvocationID.x >= stride) {
+                    values_to_add[bucket_index] = digit_offsets[bucket_index][gl_LocalInvocationID.x - stride];
+                } else {
+                    values_to_add[bucket_index] = 0;
+                }
             }
+            barrier();
+            for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
+                if (values_to_add[bucket_index] != 0) {
+                    atomicAdd(digit_offsets[bucket_index][gl_LocalInvocationID.x], values_to_add[bucket_index]);
+                }
+            }
+            barrier();
         }
+        barrier();
+
+        // Convert to exclusive prefix sum
+        for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
+            uint digit_offset = 0;
+            if (gl_LocalInvocationID.x > 0) {
+                digit_offset = digit_offsets[bucket_index][gl_LocalInvocationID.x-1];
+            }
+            barrier();
+            digit_offsets[bucket_index][gl_LocalInvocationID.x] = digit_offset;
+            barrier();
+        }
+        barrier();
 
         // If we take our digit counts and perform an exclusive prefix sum on it
         // that will give us an array where each element arr[digit] tells us where to *start* placing those digits
@@ -105,6 +125,7 @@ void main() {
         // That's why we need digit offsets
         // So our final index for any particular element will be digit_prefix_sum[digit] + digit_offset[digit][i]
         if (gl_LocalInvocationID.x == 0) {
+            // This one is so small that we just calculate it on one thread
             uint sum = 0;
             for (int i = 0; i < NUM_BUCKETS; i++) {
                 uint c = digit_counts[i];
