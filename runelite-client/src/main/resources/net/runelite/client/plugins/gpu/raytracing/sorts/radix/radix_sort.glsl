@@ -88,27 +88,15 @@ void main() {
         // D1 = index 6 and prefix[6] = 3
         // Exactly what we wanted.
 
-        // For every digit, compute an exclusive prefix sum across all elements 
-        for (int bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-            for (int stride = 1; stride < THREAD_COUNT; stride *= 2) {
-                uint digit_offset = 0;
-                if (gl_LocalInvocationID.x >= stride) {
-                    digit_offset = digit_offsets[bucket_index][gl_LocalInvocationID.x - stride];
-                }
-                barrier();
-                atomicAdd(digit_offsets[bucket_index][gl_LocalInvocationID.x], digit_offset);
-                barrier();
+        // For every bucket, compute an exclusive prefix sum across all elements
+        if (gl_LocalInvocationID.x < NUM_BUCKETS) {
+            uint sum = 0;
+            // We're doing the prefix sums as a braindead simple sequential loop because that turns out to be faster than any prefix sum calculated with multiple threads working together
+            for (int i = 0; i < THREAD_COUNT; i++) {
+                uint temp = digit_offsets[gl_LocalInvocationID.x][i];
+                digit_offsets[gl_LocalInvocationID.x][i] = sum;
+                sum += temp;
             }
-            barrier();
-
-            // Convert from inclusive prefix sum to exclusive by shifting to the right one and adding a 0 at the start
-            uint digit_offset = 0;
-            if (gl_LocalInvocationID.x > 0) {
-                digit_offset = digit_offsets[bucket_index][gl_LocalInvocationID.x-1];
-            }
-            barrier();
-            digit_offsets[bucket_index][gl_LocalInvocationID.x] = digit_offset;
-            barrier();
         }
 
         // If we take our digit counts and perform an exclusive prefix sum on it
@@ -117,7 +105,6 @@ void main() {
         // That's why we need digit offsets
         // So our final index for any particular element will be digit_prefix_sum[digit] + digit_offset[digit][i]
         if (gl_LocalInvocationID.x == 0) {
-            // The digit counts array is so small that we will just calculate the prefix sum sequentially on one thread
             uint sum = 0;
             for (int i = 0; i < NUM_BUCKETS; i++) {
                 uint c = digit_counts[i];

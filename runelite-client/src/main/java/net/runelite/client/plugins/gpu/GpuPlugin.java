@@ -759,20 +759,24 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
 			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, result_keys);
 
-			/*System.out.println("keys:");
-			for (int i = 0; i < _N; i++) {
-				System.out.println(result_keys[i]);
-			}*/
-
-			System.out.println("DATA:");
-			for (int i = 0; i < _N; i++) {
-				System.out.println(values[result_keys[i]]);
-			}
-
+			boolean sorted = true;
 			for (int i = 0; i < _N-1; i++) {
 				if (values[result_keys[i]] > values[result_keys[i+1]]) {
 					System.out.println("UNSORTED!!!");
+					sorted = false;
 					break;
+				}
+			}
+
+			if (!sorted) {
+				System.out.println("keys:");
+				for (int i = 0; i < _N; i++) {
+					System.out.println(result_keys[i]);
+				}
+
+				System.out.println("DATA:");
+				for (int i = 0; i < _N; i++) {
+					System.out.println(values[result_keys[i]]);
 				}
 			}
 
