@@ -23,34 +23,36 @@ layout(std430, binding = 3) restrict volatile coherent buffer _control {
   uint block_counter;
 };
 
-shared uint digit_start_indices[NUM_BUCKETS];
+layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
+  uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
+};
+
+shared uint group_block_id;
 shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
-    uint block_id = gl_WorkGroupID.x;
+    // One thread grabs the next block by incrementing the block counter
+    if (gl_LocalInvocationID.x == 0) {
+        // Written to shared memory so everyone can see which block they're in
+        group_block_id = atomicAdd(block_counter, 1);
+    }
+    barrier();
+
+    uint block_id = group_block_id;
     uint block_size = gl_WorkGroupSize.x;
     uint block_start_index = block_id * block_size;
     uint block_local_index = gl_LocalInvocationID.x;
     uint input_array_index = block_start_index + block_local_index;
 
     if (input_array_index < num_items) {
-        digit_start_indices[block_local_index] = 0;
         for (int i = 0; i < block_size; i++) {
             digit_offsets[i][block_local_index] = 0;
         }
 
-        barrier();
-        
-        // Count number of occurrences of the digit
-        // "Digit" doesn't refer to a decimal digit like 1, 10, 100,
-        // but rather it's a BITS_PER_PASS bit digit
-        // Think of it like a hex digit where each digit represents 0 to 15
-        // If BITS_PER_PASS == 4, then it is actually a hex digit
-        // Note that `digit_start_indices` is currently just a count of digits, we'll calculate the start indices later
-        uint value = values[source_keys[input_array_index]];
+        uint value = values[source_keys[gl_GlobalInvocationID.x]];
         uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-        atomicAdd(digit_start_indices[digit], 1);
+        barrier();
 
         // digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
         // that the items appeared in in the original array (making it a so-called "stable" sort)
@@ -76,6 +78,7 @@ void main() {
         // D1 -> 1
         // 4  -> 0
         // And that's what the following line is doing.
+        
         digit_offsets[digit][block_local_index] = 1;
         barrier();
 
@@ -130,23 +133,7 @@ void main() {
         }
         barrier();
 
-        // If we take our digit counts and perform an exclusive prefix sum on it
-        // that will give us an array where each element arr[digit] tells us where to _start_ placing those digits
-        // It's important to note that this doesn't tell you where to place the digit exactly, just where that run of digits starts
-        // That's why we need digit offsets
-        // So our final index for any particular element will be digit_start_indices[digit] + digit_offset[digit][i]
-        if (block_local_index == 0) {
-            // This one is so small that we just calculate it on one thread
-            uint sum = 0;
-            for (int i = 0; i < NUM_BUCKETS; i++) {
-                uint c = digit_start_indices[i];
-                digit_start_indices[i] = sum;
-                sum += c;
-            }
-        }
-        barrier();
-
-        uint output_index = digit_start_indices[digit] + digit_offsets[digit][block_local_index];
+        uint output_index = digit_start_indices[pass_number][digit] + digit_offsets[digit][block_local_index];
         destination_keys[output_index] = source_keys[input_array_index];
     }
 }

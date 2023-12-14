@@ -38,9 +38,6 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
 import java.util.Random;
 import javax.annotation.Nonnull;
 import javax.inject.Inject;
@@ -176,6 +173,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 	static final Shader RADIX_TEST_PROGRAM = new Shader()
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/radix/radix_sort.glsl");
+	static final Shader RADIX_DIGIT_START_INDICES_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/radix/compute_digit_start_indices.glsl");
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -183,6 +182,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glUnorderedComputeProgram;
 	private int glBitonicSortProgram;
 	private int glBitonicSetupProgram;
+	private int glRadixDigitStartIndicesProgram;
 	private int glRadixSortProgram;
 	private int glUiProgram;
 
@@ -646,6 +646,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			if (useRadix) {
 				int radixWorkGroupSize = 256;
 				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
+				glRadixDigitStartIndicesProgram = RADIX_DIGIT_START_INDICES_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 
 				int[] keys = new int[_N];
 				for (int i = 0; i < _N; i++) {
@@ -663,18 +664,48 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				int[] blah = new int[_N];
 				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, blah, GL43C.GL_DYNAMIC_DRAW);
 
+				int control_buffer = GL43C.glGenBuffers();
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 4*1, GL43C.GL_DYNAMIC_DRAW);
+				GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
+
+				int uRadixDigitStartIndicesNumItems= GL43C.glGetUniformLocation(glRadixDigitStartIndicesProgram, "num_items");
+
 				int uRadixNumItems = GL43C.glGetUniformLocation(glRadixSortProgram, "num_items");
 				int uRadixPassNumber = GL43C.glGetUniformLocation(glRadixSortProgram, "pass_number");
 
+				final int bitsPerPass = 4;
+				final int numBuckets = 1 << bitsPerPass;
+
+				int start_indices_buffer = GL43C.glGenBuffers(); // TODO: Don't generate every time?
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, start_indices_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 4*(32/bitsPerPass)*numBuckets, GL43C.GL_DYNAMIC_DRAW);
+
 				{
 					GL43C.glBeginQuery(GL43C.GL_TIME_ELAPSED, query_object);
+
+					{ // Compute digit start indices ahead of time for every pass of the radix sort
+						GL43C.glUseProgram(glRadixDigitStartIndicesProgram);
+						GL43C.glUniform1ui(uRadixDigitStartIndicesNumItems, _N);
+						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
+						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
+						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, start_indices_buffer);
+
+						GL43C.glDispatchCompute((_N + radixWorkGroupSize - 1) / radixWorkGroupSize, 1, 1);
+						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+					}
 
 					GL43C.glUseProgram(glRadixSortProgram);
 					GL43C.glUniform1ui(uRadixNumItems, _N);
 
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
-					final int bitsPerPass = 4;
-					for (int pass_number = 0; pass_number < 32/bitsPerPass; pass_number++) {
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, control_buffer);
+					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, start_indices_buffer);
+
+					for (int pass_number = 0; pass_number < 32/bitsPerPass; pass_number++) { // TODO: Inconsistent naming
+						GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
+						GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
+
 						GL43C.glUniform1ui(uRadixPassNumber, pass_number);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, temp_keys_buffer);
@@ -691,6 +722,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 				GL43C.glDeleteBuffers(values_buffer); // TODO: We wouldn't actually destroy this here
 				GL43C.glDeleteBuffers(temp_keys_buffer);
+				GL43C.glDeleteBuffers(control_buffer);
+				GL43C.glDeleteBuffers(start_indices_buffer);
 			}
 			else { // bitonic sort
 				int bitonicSortWorkGroupSize = 64;
@@ -768,7 +801,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				}
 			}
 
-			/*if (!sorted) {
+			if (!sorted) {
 				System.out.println("keys:");
 				for (int i = 0; i < _N; i++) {
 					System.out.println(result_keys[i]);
@@ -778,7 +811,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				for (int i = 0; i < _N; i++) {
 					System.out.println(values[result_keys[i]]);
 				}
-			}*/
+			}
 
 			GL43C.glDeleteBuffers(keys_buffer);
 		}
@@ -847,6 +880,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glRadixSortProgram);
 		glRadixSortProgram = -1;
+
+		GL43C.glDeleteProgram(glRadixDigitStartIndicesProgram);
+		glRadixDigitStartIndicesProgram = -1;
 
 		GL43C.glDeleteProgram(glBitonicSetupProgram);
 		glBitonicSetupProgram = -1;
