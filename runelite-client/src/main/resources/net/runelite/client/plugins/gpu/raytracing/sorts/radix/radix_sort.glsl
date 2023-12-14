@@ -19,15 +19,25 @@ layout(std430, binding = 2) restrict writeonly buffer _destination_keys {
   uint destination_keys[];
 };
 
-shared uint digit_counts[NUM_BUCKETS];
+layout(std430, binding = 3) restrict volatile coherent buffer _control {
+  uint block_counter;
+};
+
+shared uint digit_start_indices[NUM_BUCKETS];
 shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
-    if (gl_GlobalInvocationID.x < num_items) {
-        digit_counts[gl_LocalInvocationID.x] = 0;
-        for (int i = 0; i < THREAD_COUNT; i++) {
-            digit_offsets[i][gl_LocalInvocationID.x] = 0;
+    uint block_id = gl_WorkGroupID.x;
+    uint block_size = gl_WorkGroupSize.x;
+    uint block_start_index = block_id * block_size;
+    uint block_local_index = gl_LocalInvocationID.x;
+    uint input_array_index = block_start_index + block_local_index;
+
+    if (input_array_index < num_items) {
+        digit_start_indices[block_local_index] = 0;
+        for (int i = 0; i < block_size; i++) {
+            digit_offsets[i][block_local_index] = 0;
         }
 
         barrier();
@@ -37,9 +47,10 @@ void main() {
         // but rather it's a BITS_PER_PASS bit digit
         // Think of it like a hex digit where each digit represents 0 to 15
         // If BITS_PER_PASS == 4, then it is actually a hex digit
-        uint value = values[source_keys[gl_GlobalInvocationID.x]];
+        // Note that `digit_start_indices` is currently just a count of digits, we'll calculate the start indices later
+        uint value = values[source_keys[input_array_index]];
         uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-        atomicAdd(digit_counts[digit], 1);
+        atomicAdd(digit_start_indices[digit], 1);
 
         // digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
         // that the items appeared in in the original array (making it a so-called "stable" sort)
@@ -65,7 +76,7 @@ void main() {
         // D1 -> 1
         // 4  -> 0
         // And that's what the following line is doing.
-        digit_offsets[digit][gl_LocalInvocationID.x] = 1;
+        digit_offsets[digit][block_local_index] = 1;
         barrier();
 
         // Now that we have that binary 1 or 0 for each digit in the input array,
@@ -76,7 +87,7 @@ void main() {
         // C1 -> 2
         // D1 -> 3
         // How does that work?
-        // Well if we take out previous binary array from above, squished into a single line
+        // Well if we take out previous binary array from above
         // [0,1,1,0,1,0,1,0]
         // Now we do an exclusive prefix sum giving
         // [0,0,1,2,2,3,3,4]
@@ -87,12 +98,12 @@ void main() {
         // D1 = index 6 and prefix[6] = 3
         // Exactly what we wanted.
 
-        // For every bucket, compute an exclusive prefix sum across all elements
-        for (uint stride = 1; stride < THREAD_COUNT; stride <<= 1) {
+        // For every bucket, compute an inclusive prefix sum across all elements
+        for (uint stride = 1; stride < block_size; stride <<= 1) {
             uint values_to_add[NUM_BUCKETS];
             for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-                if (gl_LocalInvocationID.x >= stride) {
-                    values_to_add[bucket_index] = digit_offsets[bucket_index][gl_LocalInvocationID.x - stride];
+                if (block_local_index >= stride) {
+                    values_to_add[bucket_index] = digit_offsets[bucket_index][block_local_index - stride];
                 } else {
                     values_to_add[bucket_index] = 0;
                 }
@@ -100,44 +111,42 @@ void main() {
             barrier();
             for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
                 if (values_to_add[bucket_index] != 0) {
-                    atomicAdd(digit_offsets[bucket_index][gl_LocalInvocationID.x], values_to_add[bucket_index]);
+                    atomicAdd(digit_offsets[bucket_index][block_local_index], values_to_add[bucket_index]);
                 }
             }
             barrier();
         }
         barrier();
 
-        // Convert to exclusive prefix sum
+        // Convert to exclusive prefix sum by shifting over to the right and inserting a zero at the start
         for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
             uint digit_offset = 0;
-            if (gl_LocalInvocationID.x > 0) {
-                digit_offset = digit_offsets[bucket_index][gl_LocalInvocationID.x-1];
+            if (block_local_index > 0) {
+                digit_offset = digit_offsets[bucket_index][block_local_index-1];
             }
             barrier();
-            digit_offsets[bucket_index][gl_LocalInvocationID.x] = digit_offset;
+            digit_offsets[bucket_index][block_local_index] = digit_offset;
             barrier();
         }
         barrier();
 
         // If we take our digit counts and perform an exclusive prefix sum on it
-        // that will give us an array where each element arr[digit] tells us where to *start* placing those digits
+        // that will give us an array where each element arr[digit] tells us where to _start_ placing those digits
         // It's important to note that this doesn't tell you where to place the digit exactly, just where that run of digits starts
         // That's why we need digit offsets
-        // So our final index for any particular element will be digit_prefix_sum[digit] + digit_offset[digit][i]
-        if (gl_LocalInvocationID.x == 0) {
+        // So our final index for any particular element will be digit_start_indices[digit] + digit_offset[digit][i]
+        if (block_local_index == 0) {
             // This one is so small that we just calculate it on one thread
             uint sum = 0;
             for (int i = 0; i < NUM_BUCKETS; i++) {
-                uint c = digit_counts[i];
-                digit_counts[i] = sum;
+                uint c = digit_start_indices[i];
+                digit_start_indices[i] = sum;
                 sum += c;
             }
         }
         barrier();
 
-        uint digit_offset = digit_offsets[digit][gl_LocalInvocationID.x];
-        uint index = digit_counts[digit] + digit_offset;
-
-        destination_keys[index] = source_keys[gl_GlobalInvocationID.x];
+        uint output_index = digit_start_indices[digit] + digit_offsets[digit][block_local_index];
+        destination_keys[output_index] = source_keys[input_array_index];
     }
 }

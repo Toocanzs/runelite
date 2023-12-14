@@ -625,7 +625,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			int _N = 1000000;
+			int _N = 256;
 
 			int[] values = new int[_N];
 			Random random = new Random();
