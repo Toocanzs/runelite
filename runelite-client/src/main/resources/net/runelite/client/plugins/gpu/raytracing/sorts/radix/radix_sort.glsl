@@ -20,14 +20,15 @@ layout(std430, binding = 2) restrict writeonly buffer _destination_keys {
 };
 
 layout(std430, binding = 3) restrict volatile coherent buffer _control {
-  uint block_counter;
+  volatile uint block_counter;
+  volatile uint status_and_sum[];/*[NUM_BLOCKS][NUM_BUCKETS]*/
 };
 
 layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
   uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
 };
 
-shared uint group_block_id;
+shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily
 shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
 
 layout(local_size_x = THREAD_COUNT) in;
@@ -49,8 +50,8 @@ void main() {
         for (int i = 0; i < block_size; i++) {
             digit_offsets[i][block_local_index] = 0;
         }
-
-        uint value = values[source_keys[gl_GlobalInvocationID.x]];
+        uint input_key = source_keys[input_array_index];
+        uint value = values[input_key];
         uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         barrier();
 
@@ -119,10 +120,11 @@ void main() {
             }
             barrier();
         }
-        barrier();
 
         // Convert to exclusive prefix sum by shifting over to the right and inserting a zero at the start
         for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
+            uint sum = digit_offsets[bucket_index][block_size-1]; // Last element of an inclusive prefix sum holds the overall sum
+
             uint digit_offset = 0;
             if (block_local_index > 0) {
                 digit_offset = digit_offsets[bucket_index][block_local_index-1];
@@ -130,10 +132,35 @@ void main() {
             barrier();
             digit_offsets[bucket_index][block_local_index] = digit_offset;
             barrier();
+
+            // Write out sum for others to see
+            // TODO: every thread is executing this? We can have one thread per bucket do this instead
+            // TODO: We need the previous value for every digit to add to our sum and pass along
+            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], (1 << 31) | (sum & 0x7FFFFFFF));
+            memoryBarrier();
+            barrier();
         }
+        
+        uint previous_block_digit_offset_sum = 0;
+        // TODO: every thread is executing this?
+        if (block_id != 0) { // TODO: Will need special handling when we do multiple passes
+            // Spin until the previous block writes their sum
+            uint control_value;
+            do {
+                memoryBarrier();
+                barrier();
+                control_value = status_and_sum[(block_id - 1) * NUM_BUCKETS + digit];
+            }
+            while ((control_value >> 31) == 0);
+            previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
+        }
+
+        memoryBarrier();
         barrier();
 
-        uint output_index = digit_start_indices[pass_number][digit] + digit_offsets[digit][block_local_index];
-        destination_keys[output_index] = source_keys[input_array_index];
+        // TODO: We need to add the previous block sum to the sum we output in the control value
+
+        uint output_index = digit_start_indices[pass_number][digit] + digit_offsets[digit][block_local_index] + previous_block_digit_offset_sum;  // TODO: Move this up to do reads earlier?
+        destination_keys[output_index] = input_key;
     }
 }

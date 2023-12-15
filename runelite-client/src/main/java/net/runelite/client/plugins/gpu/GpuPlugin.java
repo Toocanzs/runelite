@@ -625,11 +625,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			int _N = 256;
+			final int _N = 512;
 
-			int[] values = new int[_N];
+			final int[] values = new int[_N];
 			Random random = new Random();
-			random.setSeed(42);
+			random.setSeed(43);
 			for (int i = 0; i < _N; i++) {
 				int r;
 				do {
@@ -639,7 +639,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				values[i] = r;
 			}
 
-			int query_object = GL43C.glGenQueries();
+			final int query_object = GL43C.glGenQueries();
 			int keys_buffer = GL43C.glGenBuffers();
 			boolean useRadix = true;
 
@@ -648,7 +648,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 				glRadixDigitStartIndicesProgram = RADIX_DIGIT_START_INDICES_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 
-				int[] keys = new int[_N];
+				final int[] keys = new int[_N];
 				for (int i = 0; i < _N; i++) {
 					keys[i] = i;
 				}
@@ -664,20 +664,22 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				int[] blah = new int[_N];
 				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, blah, GL43C.GL_DYNAMIC_DRAW);
 
-				int control_buffer = GL43C.glGenBuffers();
-				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
-				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 4*1, GL43C.GL_DYNAMIC_DRAW);
-				GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
-
-				int uRadixDigitStartIndicesNumItems= GL43C.glGetUniformLocation(glRadixDigitStartIndicesProgram, "num_items");
-
-				int uRadixNumItems = GL43C.glGetUniformLocation(glRadixSortProgram, "num_items");
-				int uRadixPassNumber = GL43C.glGetUniformLocation(glRadixSortProgram, "pass_number");
-
 				final int bitsPerPass = 4;
 				final int numBuckets = 1 << bitsPerPass;
+				final int numBlocks = (_N + radixWorkGroupSize - 1) / radixWorkGroupSize;
+				// TODO: 65535 (16776960 items at 256 block size) is the minimum required max dispatch per axis, so we need to make this 2D at least. 257 on Y would allow for uint max number of items
 
-				int start_indices_buffer = GL43C.glGenBuffers(); // TODO: Don't generate every time?
+				final int control_buffer = GL43C.glGenBuffers();
+				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 4*1 + 4*numBlocks*numBuckets, GL43C.GL_DYNAMIC_DRAW);
+				GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
+
+				final int uRadixDigitStartIndicesNumItems= GL43C.glGetUniformLocation(glRadixDigitStartIndicesProgram, "num_items");
+
+				final int uRadixNumItems = GL43C.glGetUniformLocation(glRadixSortProgram, "num_items");
+				final int uRadixPassNumber = GL43C.glGetUniformLocation(glRadixSortProgram, "pass_number");
+
+				final int start_indices_buffer = GL43C.glGenBuffers(); // TODO: Don't generate every time?
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, start_indices_buffer);
 				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 4*(32/bitsPerPass)*numBuckets, GL43C.GL_DYNAMIC_DRAW);
 
@@ -691,7 +693,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, start_indices_buffer);
 
-						GL43C.glDispatchCompute((_N + radixWorkGroupSize - 1) / radixWorkGroupSize, 1, 1);
+						GL43C.glDispatchCompute(numBlocks, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 					}
 
@@ -709,7 +711,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						GL43C.glUniform1ui(uRadixPassNumber, pass_number);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, temp_keys_buffer);
-						GL43C.glDispatchCompute((_N + radixWorkGroupSize - 1) / radixWorkGroupSize, 1, 1);
+						GL43C.glDispatchCompute(numBlocks, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 						int temp = keys_buffer;
@@ -812,6 +814,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					System.out.println(values[result_keys[i]]);
 				}
 			}
+
 
 			GL43C.glDeleteBuffers(keys_buffer);
 		}

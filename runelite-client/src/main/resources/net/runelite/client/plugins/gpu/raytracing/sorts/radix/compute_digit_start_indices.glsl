@@ -24,6 +24,7 @@ void main() {
         for (uint pass_number = 0; pass_number < (32/BITS_PER_PASS); pass_number++) {
             digit_start_indices[pass_number][gl_LocalInvocationID.x] = 0;
         }
+        memoryBarrier();
         barrier();
 
         // Count number of occurrences of the digit
@@ -37,6 +38,7 @@ void main() {
             uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
             atomicAdd(digit_start_indices[pass_number][digit], 1);
         }
+        memoryBarrier();
         barrier();
 
         // If we take our digit counts and perform an exclusive prefix sum on it
