@@ -8,28 +8,38 @@ uniform uint num_items;
 uniform uint pass_number;
 
 layout(std430, binding = 0) restrict readonly buffer _values {
-  uint values[];
+    uint values[];
 };
 
 layout(std430, binding = 1) restrict readonly buffer _source_keys {
-  uint source_keys[];
+    uint source_keys[];
 };
 
 layout(std430, binding = 2) restrict writeonly buffer _destination_keys {
-  uint destination_keys[];
+    uint destination_keys[];
 };
 
-layout(std430, binding = 3) restrict volatile coherent buffer _control {
-  volatile uint block_counter;
-  volatile uint status_and_sum[];/*[NUM_BLOCKS][NUM_BUCKETS]*/
+layout(std430, binding = 3) restrict buffer _control {
+    volatile uint block_counter;
+    volatile uint status_and_sum[];/*[NUM_BLOCKS][NUM_BUCKETS]*/
 };
 
 layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
-  uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
+    uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
 };
 
-shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily
+shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily (must barrier zeroing)
 shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
+
+#define SPIN_WHILE(value_to_write_to, value_to_read_from, condition) \
+    do {\
+        value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
+    } while ((condition));
+
+#define SPIN_WHILE_NONZERO(value_to_write_to, value_to_read_from) \
+    do {\
+        value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
+    } while (value_to_write_to == 0);
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
@@ -45,14 +55,15 @@ void main() {
     uint block_start_index = block_id * block_size;
     uint block_local_index = gl_LocalInvocationID.x;
     uint input_array_index = block_start_index + block_local_index;
+    for (int i = 0; i < block_size; i++) {
+        digit_offsets[i][block_local_index] = 0;
+    }
 
     if (input_array_index < num_items) {
-        for (int i = 0; i < block_size; i++) {
-            digit_offsets[i][block_local_index] = 0;
-        }
         uint input_key = source_keys[input_array_index];
         uint value = values[input_key];
         uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
+        memoryBarrier();
         barrier();
 
         // digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
@@ -120,10 +131,10 @@ void main() {
             }
             barrier();
         }
-
+        uint digit_sums[NUM_BUCKETS];
         // Convert to exclusive prefix sum by shifting over to the right and inserting a zero at the start
         for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-            uint sum = digit_offsets[bucket_index][block_size-1]; // Last element of an inclusive prefix sum holds the overall sum
+            digit_sums[bucket_index] = digit_offsets[bucket_index][block_size-1]; // Last element of an inclusive prefix sum holds the overall sum
 
             uint digit_offset = 0;
             if (block_local_index > 0) {
@@ -132,26 +143,65 @@ void main() {
             barrier();
             digit_offsets[bucket_index][block_local_index] = digit_offset;
             barrier();
-
-            // Write out sum for others to see
-            // TODO: every thread is executing this? We can have one thread per bucket do this instead
-            // TODO: We need the previous value for every digit to add to our sum and pass along
-            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], (1 << 31) | (sum & 0x7FFFFFFF));
-            memoryBarrier();
-            barrier();
         }
+
+        // Write out our sum + previous block sum
+        if (block_local_index < NUM_BUCKETS) {
+            uint bucket_index = block_local_index;
+
+            uint previous_block_digit_offset_sum = 0;
+            if (block_id != 0) {
+                uint control_value;
+                SPIN_WHILE_NONZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + bucket_index]);
+                previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
+            }
+
+            uint value_to_write = digit_sums[bucket_index] + previous_block_digit_offset_sum;
+            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], (1 << 31) | (value_to_write & 0x7FFFFFFF));
+        }
+
+        memoryBarrier();
+        barrier();
+        // TODO: decoupled lookback:
+        /*
+        wait for previous block to be non zero (any flag will make it non zero)
+            if the flag is totalSum, add the value to our sum and write our totalSum
+            if the flag is localSum
+                if all previous are local sum, move window back
+                if any one predecessor has a global sum, add that and the local sums to the right
+        
+        I don't like this window thing
+
+        My idea:
+            totalSum = 0;
+            // if myIndex == 0 skip this
+            prevIndex = myIndex-1
+            while (true) {
+                if (prevIndex == 0) {
+                    value = Wait until control[prevIndex].flag == totalSum
+                    totalSum += value.count;
+                    break;
+                }
+
+                value = Wait until control[prevIndex] non zero
+                if value.flag == totalSum add to our sum and break
+                if value.flag == localSum {
+                    totalSum += localSum;
+                    prevIndex = max(prevIndex - 1, 0);
+                }
+            }
+
+            So basically go back until we get a global sum
+        */
         
         uint previous_block_digit_offset_sum = 0;
         // TODO: every thread is executing this?
         if (block_id != 0) { // TODO: Will need special handling when we do multiple passes
             // Spin until the previous block writes their sum
+            // TODO: We could not spin here and instead grab it from the above section
+            //      Can't if we early out. Consider N=257, we have 1 local index so not all buckets are filled by above loop
             uint control_value;
-            do {
-                memoryBarrier();
-                barrier();
-                control_value = status_and_sum[(block_id - 1) * NUM_BUCKETS + digit];
-            }
-            while ((control_value >> 31) == 0);
+            SPIN_WHILE_NONZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + digit]);
             previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
         }
 
@@ -159,7 +209,6 @@ void main() {
         barrier();
 
         // TODO: We need to add the previous block sum to the sum we output in the control value
-
         uint output_index = digit_start_indices[pass_number][digit] + digit_offsets[digit][block_local_index] + previous_block_digit_offset_sum;  // TODO: Move this up to do reads earlier?
         destination_keys[output_index] = input_key;
     }
