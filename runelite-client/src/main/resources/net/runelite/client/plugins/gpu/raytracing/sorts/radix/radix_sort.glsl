@@ -35,8 +35,7 @@ layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
 #define STATUS_GLOBAL_SUM_BIT  0x80000000
 #define STATUS_VALUE_BITMASK   0x3fffffff
 
-shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily (must barrier zeroing)
-shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
+shared uint digit_offsets[NUM_BUCKETS * THREAD_COUNT];
 #define SPIN_WHILE(value_to_write_to, value_to_read_from, condition) \
     do {\
         value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
@@ -50,19 +49,22 @@ shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     // One thread grabs the next block by incrementing the block counter
+    // Doing it this way instead of using gl_WorkGroupId.x allows us to gaurentee the execution order of blocks
+    // Which means we can rely on the previous block (i-1) being started before (i), which is a requirement of the decoupled lookback algorithm
     if (gl_LocalInvocationID.x == 0) {
         // Written to shared memory so everyone can see which block they're in
-        group_block_id = atomicAdd(block_counter, 1);
+        digit_offsets[0] = atomicAdd(block_counter, 1); // To reduce shared memory usage, we make use of the first value in this array as a temp variable
     }
     barrier();
 
-    uint block_id = group_block_id;
+    uint block_id = digit_offsets[0];
     uint block_size = gl_WorkGroupSize.x;
     uint block_start_index = block_id * block_size;
     uint block_local_index = gl_LocalInvocationID.x;
     uint input_array_index = block_start_index + block_local_index;
+    barrier();
     for (int i = 0; i < block_size; i++) {
-        digit_offsets[i][block_local_index] = 0;
+        digit_offsets[i * THREAD_COUNT + block_local_index] = 0;
     }
 
     if (input_array_index < num_items) {
@@ -98,7 +100,7 @@ void main() {
         // 4  -> 0
         // And that's what the following line is doing.
         
-        digit_offsets[digit][block_local_index] = 1;
+        digit_offsets[digit * THREAD_COUNT + block_local_index] = 1;
         barrier();
 
         // Now that we have that binary 1 or 0 for each digit in the input array,
@@ -125,7 +127,7 @@ void main() {
             uint values_to_add[NUM_BUCKETS];
             for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
                 if (block_local_index >= stride) {
-                    values_to_add[bucket_index] = digit_offsets[bucket_index][block_local_index - stride];
+                    values_to_add[bucket_index] = digit_offsets[bucket_index * THREAD_COUNT + block_local_index - stride];
                 } else {
                     values_to_add[bucket_index] = 0;
                 }
@@ -133,18 +135,18 @@ void main() {
             barrier();
             for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
                 if (values_to_add[bucket_index] != 0) {
-                    atomicAdd(digit_offsets[bucket_index][block_local_index], values_to_add[bucket_index]);
+                    atomicAdd(digit_offsets[bucket_index * THREAD_COUNT + block_local_index], values_to_add[bucket_index]);
                 }
             }
             barrier();
         }
-        uint digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
+        uint digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit * THREAD_COUNT + block_local_index - 1];
 
         if (block_local_index < NUM_BUCKETS) {
             uint bucket_index = block_local_index;
             // Write out the digit sum (local sum of this block) so other blocks can see it
             uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // Note that the first block can only be a global sum (also we depend on that being the case later)
-            uint sum = digit_offsets[bucket_index][block_size-1]; // Last element of inclusive prefix sum is the total sum
+            uint sum = digit_offsets[bucket_index * THREAD_COUNT + block_size-1]; // Last element of inclusive prefix sum is the total sum
             uint value = (sum & STATUS_VALUE_BITMASK) | bit;
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], value);
         }
@@ -173,7 +175,7 @@ void main() {
                     }
                 }
                 // Write out the global sum now that we know it
-                uint total_sum = digit_offsets[bucket_index][block_size-1] + previous_digit_sum;
+                uint total_sum = digit_offsets[bucket_index * THREAD_COUNT + block_size-1] + previous_digit_sum;
                 atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], (total_sum & STATUS_VALUE_BITMASK) | STATUS_GLOBAL_SUM_BIT);
             }
         }

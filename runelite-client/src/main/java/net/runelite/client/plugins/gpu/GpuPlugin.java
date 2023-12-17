@@ -628,12 +628,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			final int _N = 1000000;
+			final int N = 1000000;
 
-			final int[] values = new int[_N];
+			final int[] values = new int[N];
 			Random random = new Random();
 			random.setSeed(48);
-			for (int i = 0; i < _N; i++) {
+			for (int i = 0; i < N; i++) {
 				int r;
 				do {
 					r = random.nextInt();
@@ -649,16 +649,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			if (useRadix) {
 				final int radixWorkGroupSize = 256;
 				final int bitsPerPass = 4;
-				final int numPasses = 32/bitsPerPass;
+				final int numPasses = (int) Math.ceil(32.0/bitsPerPass);
 				final int numBuckets = 1 << bitsPerPass;
-				final int numBlocks = (_N + radixWorkGroupSize - 1) / radixWorkGroupSize;
+				final int numBlocks = (N + radixWorkGroupSize - 1) / radixWorkGroupSize;
 
 				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 				glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 				glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createTemplate(numPasses, -1)); // Thread config is not used here
 
-				final int[] keys = new int[_N];
-				for (int i = 0; i < _N; i++) {
+				final int[] keys = new int[N];
+				for (int i = 0; i < N; i++) {
 					keys[i] = i;
 				}
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
@@ -670,8 +670,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 				int temp_keys_buffer = GL43C.glGenBuffers();
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, temp_keys_buffer);
-				int[] blah = new int[_N];
-				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, blah, GL43C.GL_DYNAMIC_DRAW);
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, N*4, GL43C.GL_DYNAMIC_DRAW);
 
 				// TODO: 65535 (16776960 items at 256 block size) is the minimum required max dispatch per axis, so we need to make this 2D at least. 257 on Y would allow for uint max number of items
 
@@ -695,7 +694,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 					{ // Count the digits in the dataset, one set of counts per pass
 						GL43C.glUseProgram(glRadixCountDigitsProgram);
-						GL43C.glUniform1ui(uRadixDigitCountNumItems, _N);
+						GL43C.glUniform1ui(uRadixDigitCountNumItems, N);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, start_indices_buffer);
@@ -712,7 +711,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					}
 
 					GL43C.glUseProgram(glRadixSortProgram);
-					GL43C.glUniform1ui(uRadixNumItems, _N);
+					GL43C.glUniform1ui(uRadixNumItems, N);
 
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, control_buffer);
@@ -750,7 +749,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				glBitonicSetupProgram = BITONIC_SETUP_PROGRAM.compile(createTemplate(bitonicSortWorkGroupSize, -1));
 
 				// Bitonic sort requires power of two size arrays, so we pad until power of two
-				int paddedArraySize = nextPowerOf2(_N);
+				int paddedArraySize = nextPowerOf2(N);
 
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
 				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, (long) 4 * paddedArraySize, GL43C.GL_DYNAMIC_DRAW); // NOTE: uninitialized padding will be filled in later
@@ -774,7 +773,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 					// Run the setup program, setting up keys and filling padding values
 					GL43C.glUseProgram(glBitonicSetupProgram);
-					GL43C.glUniform1ui(uSetupUnpaddedItemCount, _N);
+					GL43C.glUniform1ui(uSetupUnpaddedItemCount, N);
 					GL43C.glUniform1ui(uSetupPaddedArraySize, paddedArraySize);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, keys_buffer);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, values_buffer);
@@ -805,20 +804,20 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			long[] result = new long[1];
 			GL43C.glGetQueryObjectui64v(query_object, GL43C.GL_QUERY_RESULT, result);
 			double ms = (result[0] / 1e6);
-			System.out.println("Sorted "+_N+" in " + ms + "ms");
+			System.out.println("Sorted "+N+" in " + ms + "ms");
 			double seconds = ms*0.001;
-			double itemsPerSecond = _N/seconds;
+			double itemsPerSecond = N/seconds;
 			double gigaItemsPerSecond = itemsPerSecond * 1e-9;
 			double gigaBytesPerSecond = gigaItemsPerSecond * 4;
 			System.out.println(gigaItemsPerSecond+" giga items per second (" + gigaBytesPerSecond +" gigabytes per second)");
 
-			int[] result_keys = new int[_N];
+			int[] result_keys = new int[N];
 			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, keys_buffer);
 			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, result_keys);
 
 			boolean sorted = true;
-			int[] keyCounts = new int[_N];
-			for (int i = 0; i < _N-1; i++) {
+			int[] keyCounts = new int[N];
+			for (int i = 0; i < N-1; i++) {
 				keyCounts[result_keys[i]]++;
 				if (keyCounts[result_keys[i]] > 1) {
 					System.out.println("REPEATED KEYS!!!!!");
