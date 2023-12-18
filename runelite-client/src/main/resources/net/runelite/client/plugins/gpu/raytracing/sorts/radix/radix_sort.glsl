@@ -41,9 +41,6 @@ shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
         value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
     } while (value_to_write_to == 0);
 
-#define STATUS_VALUE_BITMASK 0x7FFFFFFF
-#define STATUS_GLOBAL_SUM_BIT (1 << 31)
-
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     // One thread grabs the next block by incrementing the block counter
@@ -69,10 +66,55 @@ void main() {
         uint digit_start_index = digit_start_indices[pass_number][digit];
         memoryBarrier();
         barrier();
+
+        // digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
+        // that the items appeared in in the original array (making it a so-called "stable" sort)
+        // In order to generate that offset table, we would need to know exactly how many instances of the digit we want to place
+        // have appeared before us in the input array
+        // so for example if we have an array like the following
+        // [2,1,1,3,1,2,1,4]
+        // You can see we have multiple 1s in that array. The order they appear in that array needs to be maintained
+        // (because it might not just be a 1, it might be a 1 in the bottom N bits, with other bits to be sorted by later)
+        // so giving just the 1s a letter to distinguish them
+        // [2,A1,B1,3,C1,2,D1,4]
+        // Now our output array should contain 
+        // [A1, B1, C1, D1, 2, 2, 3, 4]
+        // The order they appeared in is maintained
+        // To get that we can generate a binary 1 or 0 for every digit, across every data element indicating whether or not the current element has that digit
+        // Or in other words, for digit 1 that array would be
+        // 2  -> 0
+        // A1 -> 1
+        // B1 -> 1
+        // 3  -> 0
+        // C1 -> 1
+        // 2  -> 0
+        // D1 -> 1
+        // 4  -> 0
+        // And that's what the following line is doing.
         
         digit_offsets[digit][block_local_index] = 1;
         barrier();
 
+        // Now that we have that binary 1 or 0 for each digit in the input array,
+        // We can perform an exclusive prefix sum to get the relative offset of that digit
+        // Meaning our result will map
+        // A1 -> 0
+        // B1 -> 1
+        // C1 -> 2
+        // D1 -> 3
+        // How does that work?
+        // Well if we take out previous binary array from above
+        // [0,1,1,0,1,0,1,0]
+        // Now we do an exclusive prefix sum giving
+        // [0,0,1,2,2,3,3,4]
+        // And if you plug in the index of each element
+        // A1 = index 1 and prefix[1] = 0
+        // B1 = index 2 and prefix[2] = 1
+        // C1 = index 4 and prefix[4] = 2
+        // D1 = index 6 and prefix[6] = 3
+        // Exactly what we wanted.
+
+        // For every bucket, compute an inclusive prefix sum across all elements
         for (uint stride = 1; stride < block_size; stride <<= 1) {
             uint values_to_add[NUM_BUCKETS];
             for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
@@ -90,7 +132,8 @@ void main() {
             }
             barrier();
         }
-        uint digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index-1]; // Needs to be an exclusive sum, so we grab elements to the left or zero to shift everything over making it exclusive
+
+        uint digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
 
         // Write out our sum + previous block sum
         if (block_local_index < NUM_BUCKETS) {
@@ -100,11 +143,11 @@ void main() {
             if (block_id != 0) {
                 uint control_value;
                 SPIN_WHILE_NONZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + bucket_index]);
-                previous_block_digit_offset_sum = control_value & STATUS_VALUE_BITMASK;
+                previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
             }
-            uint local_sum = digit_offsets[bucket_index][block_size-1]; // last element holds the sum in an inclusive sum
-            uint value_to_write = local_sum + previous_block_digit_offset_sum;
-            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
+
+            uint value_to_write = digit_offsets[bucket_index][block_size-1] + previous_block_digit_offset_sum;
+            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], (1 << 31) | (value_to_write & 0x7FFFFFFF));
         }
 
         memoryBarrier();
@@ -118,7 +161,7 @@ void main() {
             //      Can't if we early out. Consider N=257, we have 1 local index so not all buckets are filled by above loop
             uint control_value;
             SPIN_WHILE_NONZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + digit]);
-            previous_block_digit_offset_sum = control_value & STATUS_VALUE_BITMASK;
+            previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
         }
 
         memoryBarrier();
@@ -126,51 +169,7 @@ void main() {
 
         // TODO: We need to add the previous block sum to the sum we output in the control value
         uint output_index = digit_start_index + digit_offset + previous_block_digit_offset_sum;  // TODO: Move this up to do reads earlier?
+
         destination_keys[output_index] = input_key;
     }
 }
-
-// digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
-// that the items appeared in in the original array (making it a so-called "stable" sort)
-// In order to generate that offset table, we would need to know exactly how many instances of the digit we want to place
-// have appeared before us in the input array
-// so for example if we have an array like the following
-// [2,1,1,3,1,2,1,4]
-// You can see we have multiple 1s in that array. The order they appear in that array needs to be maintained
-// (because it might not just be a 1, it might be a 1 in the bottom N bits, with other bits to be sorted by later)
-// so giving just the 1s a letter to distinguish them
-// [2,A1,B1,3,C1,2,D1,4]
-// Now our output array should contain 
-// [A1, B1, C1, D1, 2, 2, 3, 4]
-// The order they appeared in is maintained
-// To get that we can generate a binary 1 or 0 for every digit, across every data element indicating whether or not the current element has that digit
-// Or in other words, for digit 1 that array would be
-// 2  -> 0
-// A1 -> 1
-// B1 -> 1
-// 3  -> 0
-// C1 -> 1
-// 2  -> 0
-// D1 -> 1
-// 4  -> 0
-
-// Now that we have that binary 1 or 0 for each digit in the input array,
-// We can perform an exclusive prefix sum to get the relative offset of that digit
-// Meaning our result will map
-// A1 -> 0
-// B1 -> 1
-// C1 -> 2
-// D1 -> 3
-// How does that work?
-// Well if we take out previous binary array from above
-// [0,1,1,0,1,0,1,0]
-// Now we do an exclusive prefix sum giving
-// [0,0,1,2,2,3,3,4]
-// And if you plug in the index of each element
-// A1 = index 1 and prefix[1] = 0
-// B1 = index 2 and prefix[2] = 1
-// C1 = index 4 and prefix[4] = 2
-// D1 = index 6 and prefix[6] = 3
-// Exactly what we wanted.
-
-// For every bucket, compute an inclusive prefix sum across all elements

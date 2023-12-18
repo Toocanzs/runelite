@@ -644,12 +644,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			final int query_object = GL43C.glGenQueries();
 			int keys_buffer = GL43C.glGenBuffers();
-			boolean useRadix = false;
+			boolean useRadix = true;
 
 			if (useRadix) {
 				final int radixWorkGroupSize = 256;
 				final int bitsPerPass = 4;
-				final int numPasses = (int) Math.ceil(32.0/bitsPerPass);
+				final int numPasses = 32/bitsPerPass;
 				final int numBuckets = 1 << bitsPerPass;
 				final int numBlocks = (N + radixWorkGroupSize - 1) / radixWorkGroupSize;
 
@@ -717,10 +717,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, control_buffer);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, start_indices_buffer);
 
-					// NOTE: This buffer must be bound during the loop for the glClearBufferData call
-					// It's called outside the loop because calling it inside the loop roughly doubled the sort time
-					GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
 					for (int pass_number = 0; pass_number < numPasses; pass_number++) { // TODO: Inconsistent naming
+						GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
 						GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
 
 						GL43C.glUniform1ui(uRadixPassNumber, pass_number);
@@ -833,13 +831,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 
 			if (!sorted) {
-				/*System.out.println("keys:");
-				for (int i = 0; i < _N; i++) {
+				System.out.println("keys:");
+				for (int i = 0; i < N; i++) {
 					System.out.println(result_keys[i]);
 				}
 
-				System.out.println("DATA:");
-				for (int i = 0; i < _N; i++) {
+				/*System.out.println("DATA:");
+				for (int i = 0; i < N; i++) {
 					System.out.println(values[result_keys[i]]);
 				}*/
 			}
