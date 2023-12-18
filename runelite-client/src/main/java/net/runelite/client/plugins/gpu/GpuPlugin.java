@@ -644,7 +644,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			final int query_object = GL43C.glGenQueries();
 			int keys_buffer = GL43C.glGenBuffers();
-			boolean useRadix = true;
+			boolean useRadix = false;
 
 			if (useRadix) {
 				final int radixWorkGroupSize = 256;
@@ -820,12 +820,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			for (int i = 0; i < N-1; i++) {
 				keyCounts[result_keys[i]]++;
 				if (keyCounts[result_keys[i]] > 1) {
-					System.out.println("REPEATED KEYS!!!!!");
+					System.out.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!REPEATED KEYS!!!!!");
 					sorted = false;
 					break;
 				}
 				if (values[result_keys[i]] > values[result_keys[i+1]]) {
-					System.out.println("UNSORTED!!!");
+					System.out.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!UNSORTED!!!");
 					sorted = false;
 					break;
 				}
