@@ -45,6 +45,30 @@ shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
 #define STATUS_PARTIAL_SUM_BIT (1 << 30)
 #define STATUS_GLOBAL_SUM_BIT (1 << 31)
 
+uint lookback_for_global_sum(uint block_id, uint bucket_index) {
+    // Decoupled lookback
+    // Basically go back a block at a time, read the value,
+    // if it's a partial sum, add it to the running global sum
+    // if it's a globla sum, that represents the sum of all values to the left (including the current one), so we add and break
+    // This will give us a bit faster of an answer rather than waiting for the block to the left to output it's global sum 
+    uint global_sum = 0;
+    uint previous_block_index = (block_id - 1);
+    while (true) {
+        uint control_value;
+        SPIN_WHILE_ZERO(control_value, status_and_sum[previous_block_index * NUM_BUCKETS + bucket_index]);
+        if ((control_value & STATUS_GLOBAL_SUM_BIT) != 0) {
+            global_sum += control_value & STATUS_VALUE_BITMASK;
+            break;
+        }
+        if ((control_value & STATUS_PARTIAL_SUM_BIT) != 0) {
+            previous_block_index = max(previous_block_index - 1, 0); // NOTE: We rely on the first block always returning a global sum so this doesn't go on forever
+            global_sum += control_value & STATUS_VALUE_BITMASK;
+        }
+    }
+
+    return global_sum;
+}
+
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     // One thread grabs the next block by incrementing the block counter
@@ -149,45 +173,26 @@ void main() {
         memoryBarrier();
         barrier();
         
-        uint previous_block_digit_offset_sum = 0;
-        // TODO: every thread is executing this?
         if (block_id != 0) {
-            uint previous_block_index = (block_id - 1);
-            while (true) {
-                uint control_value;
-                SPIN_WHILE_ZERO(control_value, status_and_sum[previous_block_index * NUM_BUCKETS + digit]);
-                if ((control_value & STATUS_GLOBAL_SUM_BIT) != 0) {
-                    previous_block_digit_offset_sum += control_value & STATUS_VALUE_BITMASK;
-                    break;
-                }
-                if ((control_value & STATUS_PARTIAL_SUM_BIT) != 0) {
-                    previous_block_index = max(previous_block_index - 1, 0); // NOTE: We rely on the first block always returning a global sum so this doesn't go on forever
-                    previous_block_digit_offset_sum += control_value & STATUS_VALUE_BITMASK;
-                }
+            if (block_local_index < NUM_BUCKETS) {
+                uint bucket_index = block_local_index;
+                uint sum = lookback_for_global_sum(block_id, bucket_index);
+
+                // Write out the global sum for this block now that we know it
+                uint value_to_write = digit_offsets[bucket_index][block_size-1] + sum;
+                atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
             }
+        }
+
+        uint digit_local_offset = 0;
+        if (block_id != 0) { // Grab the digit offset too
+            digit_local_offset = lookback_for_global_sum(block_id, digit);
         }
 
         memoryBarrier();
         barrier();
 
-        // Write out our sum + previous block sum
-        if (block_local_index < NUM_BUCKETS) {
-            uint bucket_index = block_local_index;
-
-            uint previous_block_digit_offset_sum = 0;
-            if (block_id != 0) {
-                uint control_value;
-                SPIN_WHILE(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + bucket_index], (control_value & STATUS_GLOBAL_SUM_BIT) == 0);
-                previous_block_digit_offset_sum = control_value & STATUS_VALUE_BITMASK;
-            }
-
-            uint value_to_write = digit_offsets[bucket_index][block_size-1] + previous_block_digit_offset_sum;
-            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
-        }
-
-        // TODO: We need to add the previous block sum to the sum we output in the control value
-        uint output_index = digit_start_index + digit_offset + previous_block_digit_offset_sum;  // TODO: Move this up to do reads earlier?
-
+        uint output_index = digit_start_index + digit_offset + digit_local_offset;
         destination_keys[output_index] = input_key;
     }
 }
