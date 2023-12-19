@@ -168,27 +168,25 @@ void main() {
 
         digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
     }
-    if (input_array_index < num_items) {
-        
+
+    if (block_local_index < NUM_BUCKETS) {
+        // Write out the partial sum for this block, for every bucket
+        uint bucket_index = block_local_index;
+        uint value_to_write = digit_offsets[bucket_index][block_size-1]; // Last element of offsets holds the sum
+        uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // First block is a global sum since no other blocks exsit to the left
+        atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
+    }
+
+    barrier();
+
+    if (block_id != 0) {
         if (block_local_index < NUM_BUCKETS) {
-            // Write out the partial sum for this block, for every bucket
             uint bucket_index = block_local_index;
-            uint value_to_write = digit_offsets[bucket_index][block_size-1]; // Last element of offsets holds the sum
-            uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // First block is a global sum since no other blocks exsit to the left
-            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
-        }
+            uint sum = lookback_for_global_sum(block_id, bucket_index);
 
-        barrier();
-        
-        if (block_id != 0) {
-            if (block_local_index < NUM_BUCKETS) {
-                uint bucket_index = block_local_index;
-                uint sum = lookback_for_global_sum(block_id, bucket_index);
-
-                // Write out the global sum for this block now that we know it
-                uint value_to_write = digit_offsets[bucket_index][block_size-1] + sum;
-                atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
-            }
+            // Write out the global sum for this block now that we know it
+            uint value_to_write = digit_offsets[bucket_index][block_size-1] + sum;
+            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
         }
     }
         
