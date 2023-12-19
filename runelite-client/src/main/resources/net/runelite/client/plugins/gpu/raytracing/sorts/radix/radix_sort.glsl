@@ -142,8 +142,33 @@ void main() {
         if (block_local_index < NUM_BUCKETS) {
             uint bucket_index = block_local_index;
             uint value_to_write = digit_offsets[bucket_index][block_size-1];
-            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_PARTIAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
+            uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT;
+            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
         }
+
+        memoryBarrier();
+        barrier();
+        
+        uint previous_block_digit_offset_sum = 0;
+        // TODO: every thread is executing this?
+        if (block_id != 0) {
+            uint previous_block_index = (block_id - 1);
+            while (true) {
+                uint control_value;
+                SPIN_WHILE_ZERO(control_value, status_and_sum[previous_block_index * NUM_BUCKETS + digit]);
+                if ((control_value & STATUS_GLOBAL_SUM_BIT) != 0) {
+                    previous_block_digit_offset_sum += control_value & STATUS_VALUE_BITMASK;
+                    break;
+                }
+                if ((control_value & STATUS_PARTIAL_SUM_BIT) != 0) {
+                    previous_block_index = max(previous_block_index - 1, 0); // NOTE: We rely on the first block always returning a global sum so this doesn't go on forever
+                    previous_block_digit_offset_sum += control_value & STATUS_VALUE_BITMASK;
+                }
+            }
+        }
+
+        memoryBarrier();
+        barrier();
 
         // Write out our sum + previous block sum
         if (block_local_index < NUM_BUCKETS) {
@@ -159,23 +184,6 @@ void main() {
             uint value_to_write = digit_offsets[bucket_index][block_size-1] + previous_block_digit_offset_sum;
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
         }
-
-        memoryBarrier();
-        barrier();
-        
-        uint previous_block_digit_offset_sum = 0;
-        // TODO: every thread is executing this?
-        if (block_id != 0) { // TODO: Will need special handling when we do multiple passes
-            // Spin until the previous block writes their sum
-            // TODO: We could not spin here and instead grab it from the above section
-            //      Can't if we early out. Consider N=257, we have 1 local index so not all buckets are filled by above loop
-            uint control_value;
-            SPIN_WHILE(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + digit], (control_value & STATUS_GLOBAL_SUM_BIT) == 0);
-            previous_block_digit_offset_sum = control_value & STATUS_VALUE_BITMASK;
-        }
-
-        memoryBarrier();
-        barrier();
 
         // TODO: We need to add the previous block sum to the sum we output in the control value
         uint output_index = digit_start_index + digit_offset + previous_block_digit_offset_sum;  // TODO: Move this up to do reads earlier?
