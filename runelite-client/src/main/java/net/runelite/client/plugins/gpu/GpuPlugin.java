@@ -827,12 +827,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			for (int i = 0; i < N-1; i++) {
 				keyCounts[result_keys[i]]++;
 				if (keyCounts[result_keys[i]] > 1) {
-					System.out.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!REPEATED KEYS!!!!!");
+					System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!REPEATED KEYS!!!!!\n");
 					sorted = false;
 					break;
 				}
 				if (values[result_keys[i]] > values[result_keys[i+1]]) {
-					System.out.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!UNSORTED!!!");
+					System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!UNSORTED!!!\n");
 					sorted = false;
 					break;
 				}
@@ -840,10 +840,10 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 
 			if (!sorted) {
-				System.out.println("keys:");
+				/*System.out.println("keys:");
 				for (int i = 0; i < N; i++) {
 					System.out.println(result_keys[i]);
-				}
+				}*/
 
 				/*System.out.println("DATA:");
 				for (int i = 0; i < N; i++) {
