@@ -676,7 +676,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 				final int control_buffer = GL43C.glGenBuffers();
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
-				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 4*1 + 4*numBlocks*numBuckets, GL43C.GL_DYNAMIC_DRAW);
+				// 1 int for the block counter, and then an int array of size [numBlocks][numBuckets]
+				final int singleControlBufferSizeUnaligned = (4*1 + 4*numBlocks*numBuckets);
+				// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
+				final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
+				// So we round up to the nearest multiple of that
+				final int singleControlBufferSizeAligned = ((singleControlBufferSizeUnaligned + offsetAlignment-1)/offsetAlignment)*offsetAlignment;
+
+				// We allocate numPasses of these control buffers at once, and instead of clearing the data every pass we just move the pointer over to the extra previously cleared data
+				final int totalControlBufferSize = singleControlBufferSizeAligned * numPasses;
+				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, totalControlBufferSize, GL43C.GL_DYNAMIC_DRAW);
 				GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
 
 				final int uRadixDigitCountNumItems= GL43C.glGetUniformLocation(glRadixCountDigitsProgram, "num_items");
@@ -699,7 +708,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, start_indices_buffer);
 
-						GL43C.glDispatchCompute(numBlocks, 1, 1);
+						GL43C.glDispatchCompute(numBlocks, numPasses, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 					}
 
@@ -714,16 +723,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glUniform1ui(uRadixNumItems, N);
 
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
-					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, control_buffer);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, start_indices_buffer);
 
-					for (int pass_number = 0; pass_number < numPasses; pass_number++) { // TODO: Inconsistent naming
-						GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
-						GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
+					checkGLErrors();
 
+					for (int pass_number = 0; pass_number < numPasses; pass_number++) { // TODO: Inconsistent naming
 						GL43C.glUniform1ui(uRadixPassNumber, pass_number);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, temp_keys_buffer);
+						// Shift over the control buffer to the one corresponding to this pass
+						GL43C.glBindBufferRange(GL43C.GL_SHADER_STORAGE_BUFFER, 3, control_buffer, singleControlBufferSizeAligned * pass_number, singleControlBufferSizeUnaligned);
 						GL43C.glDispatchCompute(numBlocks, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
@@ -844,6 +853,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 
 			GL43C.glDeleteBuffers(keys_buffer);
+			checkGLErrors();
 		}
 		else if (computeMode == ComputeMode.OPENCL)
 		{
