@@ -76,6 +76,7 @@ void main() {
         // Written to shared memory so everyone can see which block they're in
         group_block_id = atomicAdd(block_counter, 1);
     }
+    memoryBarrierShared();
     barrier();
 
     uint block_id = group_block_id;
@@ -86,6 +87,9 @@ void main() {
     for (int i = 0; i < block_size; i++) {
         digit_offsets[i][block_local_index] = 0;
     }
+
+    memoryBarrierShared();
+    barrier();
 
     // These values will be filled in if input_array_index < num_items, and only be used in a separate if input_array_index < num_items
     uint digit = 0;
@@ -126,6 +130,7 @@ void main() {
         // And that's what the following line is doing.
         
         digit_offsets[digit][block_local_index] = 1;
+        memoryBarrierShared();
         barrier();
 
         // Now that we have that binary 1 or 0 for each digit in the input array,
@@ -157,49 +162,61 @@ void main() {
                     values_to_add[bucket_index] = 0;
                 }
             }
+            memoryBarrierShared();
             barrier();
             for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
                 if (values_to_add[bucket_index] != 0) {
-                    atomicAdd(digit_offsets[bucket_index][block_local_index], values_to_add[bucket_index]);
+                    //atomicAdd(digit_offsets[bucket_index][block_local_index], values_to_add[bucket_index]); // NOTE: May need the atomic add later if we pack 4 counts into one uint
+                    digit_offsets[bucket_index][block_local_index] += values_to_add[bucket_index];
                 }
             }
+            memoryBarrierShared();
             barrier();
         }
 
         digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
     }
+    // Capture digit sum so we can overwrite digit_offsets for other shared memory stuff
+    uint digit_sum_at_local_index = block_local_index < NUM_BUCKETS ? digit_offsets[block_local_index][block_size-1] : 0;
+    // NOTE: From this point on digit_offsets is free to be used for anything else
+    memoryBarrierShared();
+    barrier();
 
     if (block_local_index < NUM_BUCKETS) {
         // Write out the partial sum for this block, for every bucket
         uint bucket_index = block_local_index;
-        uint value_to_write = digit_offsets[bucket_index][block_size-1]; // Last element of offsets holds the sum
+        uint value_to_write = digit_sum_at_local_index; // Last element of offsets holds the sum
         uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // First block is a global sum since no other blocks exsit to the left
         atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
     }
-
+    memoryBarrier();
     barrier();
 
+    uint digit_local_offset = 0;
     if (block_id != 0) {
         if (block_local_index < NUM_BUCKETS) {
             uint bucket_index = block_local_index;
-            uint sum = lookback_for_global_sum(block_id, bucket_index);
+            uint lookback_sum = lookback_for_global_sum(block_id, bucket_index);
 
             // Write out the global sum for this block now that we know it
-            uint value_to_write = digit_offsets[bucket_index][block_size-1] + sum;
+            uint value_to_write = digit_sum_at_local_index + lookback_sum;
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
+
+            // Write lookback result to shared memory so we can grab it later for when we want to know the sum for a single digit
+            digit_offsets[bucket_index][0] = lookback_sum; // Reusing the shared memory to reduce the amount we have declared
         }
+        memoryBarrier();
+        barrier();
     }
-        
+    
+    memoryBarrier();
     barrier();
 
     if (input_array_index < num_items) {
-
         uint digit_local_offset = 0;
-        if (block_id != 0) { // TODO: Every thread is doing this
-            // Grab the digit offset too
-            // TODO: Slow but we don't have a guarentee of hitting [digit] above
-            // TODO: Break out of invo < N if, do the above, write to shared memory, 
-            digit_local_offset = lookback_for_global_sum(block_id, digit);
+        if (block_id != 0) {
+            // Note this value is actually the sum of the number of digits to the left of this block
+            digit_local_offset = digit_offsets[digit][0];
         }
 
         barrier();
