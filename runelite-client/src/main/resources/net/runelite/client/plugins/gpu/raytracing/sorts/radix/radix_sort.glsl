@@ -87,11 +87,17 @@ void main() {
         digit_offsets[i][block_local_index] = 0;
     }
 
+    // These values will be filled in if input_array_index < num_items, and only be used in a separate if input_array_index < num_items
+    uint digit = 0;
+    uint digit_start_index = 0;
+    uint digit_offset = 0;
+    uint input_key = 0;
+
     if (input_array_index < num_items) {
-        uint input_key = source_keys[input_array_index];
+        input_key = source_keys[input_array_index];
         uint value = values[input_key];
-        uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-        uint digit_start_index = digit_start_indices[pass_number][digit];
+        digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
+        digit_start_index = digit_start_indices[pass_number][digit];
         barrier();
 
         // digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
@@ -160,7 +166,9 @@ void main() {
             barrier();
         }
 
-        uint digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
+        digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
+    }
+    if (input_array_index < num_items) {
         
         if (block_local_index < NUM_BUCKETS) {
             // Write out the partial sum for this block, for every bucket
@@ -182,8 +190,11 @@ void main() {
                 atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
             }
         }
+    }
         
-        barrier();
+    barrier();
+
+    if (input_array_index < num_items) {
 
         uint digit_local_offset = 0;
         if (block_id != 0) { // TODO: Every thread is doing this
