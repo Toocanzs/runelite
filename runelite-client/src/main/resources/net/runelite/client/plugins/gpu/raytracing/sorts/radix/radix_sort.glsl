@@ -92,7 +92,6 @@ void main() {
         uint value = values[input_key];
         uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         uint digit_start_index = digit_start_indices[pass_number][digit];
-        memoryBarrier();
         barrier();
 
         // digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
@@ -164,13 +163,13 @@ void main() {
         uint digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
         
         if (block_local_index < NUM_BUCKETS) {
+            // Write out the partial sum for this block, for every bucket
             uint bucket_index = block_local_index;
-            uint value_to_write = digit_offsets[bucket_index][block_size-1];
-            uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT;
+            uint value_to_write = digit_offsets[bucket_index][block_size-1]; // Last element of offsets holds the sum
+            uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // First block is a global sum since no other blocks exsit to the left
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
         }
 
-        memoryBarrier();
         barrier();
         
         if (block_id != 0) {
@@ -183,13 +182,17 @@ void main() {
                 atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
             }
         }
+        
+        barrier();
 
         uint digit_local_offset = 0;
-        if (block_id != 0) { // Grab the digit offset too
+        if (block_id != 0) { // TODO: Every thread is doing this
+            // Grab the digit offset too
+            // TODO: Slow but we don't have a guarentee of hitting [digit] above
+            // TODO: Break out of invo < N if, do the above, write to shared memory, 
             digit_local_offset = lookback_for_global_sum(block_id, digit);
         }
 
-        memoryBarrier();
         barrier();
 
         uint output_index = digit_start_index + digit_offset + digit_local_offset;
