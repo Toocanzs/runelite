@@ -36,10 +36,13 @@ shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
         value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
     } while ((condition));
 
-#define SPIN_WHILE_NONZERO(value_to_write_to, value_to_read_from) \
+#define SPIN_WHILE_ZERO(value_to_write_to, value_to_read_from) \
     do {\
         value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
     } while (value_to_write_to == 0);
+
+#define STATUS_VALUE_BITMASK 0x7FFFFFFF
+#define STATUS_GLOBAL_SUM_BIT (1 << 31)
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
@@ -142,12 +145,12 @@ void main() {
             uint previous_block_digit_offset_sum = 0;
             if (block_id != 0) {
                 uint control_value;
-                SPIN_WHILE_NONZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + bucket_index]);
-                previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
+                SPIN_WHILE_ZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + bucket_index]);
+                previous_block_digit_offset_sum = control_value & STATUS_VALUE_BITMASK;
             }
 
             uint value_to_write = digit_offsets[bucket_index][block_size-1] + previous_block_digit_offset_sum;
-            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], (1 << 31) | (value_to_write & 0x7FFFFFFF));
+            atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
         }
 
         memoryBarrier();
@@ -160,8 +163,8 @@ void main() {
             // TODO: We could not spin here and instead grab it from the above section
             //      Can't if we early out. Consider N=257, we have 1 local index so not all buckets are filled by above loop
             uint control_value;
-            SPIN_WHILE_NONZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + digit]);
-            previous_block_digit_offset_sum = control_value & 0x7FFFFFFF;
+            SPIN_WHILE_ZERO(control_value, status_and_sum[(block_id - 1) * NUM_BUCKETS + digit]);
+            previous_block_digit_offset_sum = control_value & STATUS_VALUE_BITMASK;
         }
 
         memoryBarrier();
