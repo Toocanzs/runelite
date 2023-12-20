@@ -17,7 +17,6 @@ void main() {
     // That's why we need digit offsets
     // So our final index for any particular element will be digit_start_indices[digit] + digit_offset[digit][i]
 
-#if NUM_BUCKETS <= 16 
     // The prefix sum is so small that we just calculate it sequentially for each pass
     uint pass_number = gl_LocalInvocationID.x; // group size == 32/BITS_PER_PASS so no need to check if in bounds
     uint sum = 0;
@@ -26,8 +25,4 @@ void main() {
         digit_start_indices[pass_number][i] = sum;
         sum += c;
     }
-#else
-    #error "TODO: Change dispatch to be THREAD_COUNT=x=numBuckets, y=pass number, and then do a cooperative prefix sum instead"
-#endif
-
 }
