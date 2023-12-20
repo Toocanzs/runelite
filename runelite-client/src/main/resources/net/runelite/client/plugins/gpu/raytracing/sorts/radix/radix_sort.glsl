@@ -101,16 +101,8 @@ void main() {
     uint block_start_index = block_id * block_size;
     uint block_local_index = gl_LocalInvocationID.x;
     uint input_array_index = block_start_index + block_local_index;
-    /*if (block_local_index < NUM_BITFIELD_INTS) {
-        uint bitfield_index = block_local_index;
-        // Zero bitfields for each digit
-        for (int bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-            digit_offset_bitfields[bucket_index][bitfield_index] = 0;
-            bitcounts[bucket_index][bitfield_index] = 0;
-        }
-    }*/
 
-    // Zero bitfields for each digit
+    // Zero shared memory
     if (block_local_index < NUM_BUCKETS) {
         uint bucket_index = block_local_index;
         for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) {
@@ -144,23 +136,19 @@ void main() {
 
 
     if (input_array_index < num_items) {
-        for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-            // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
-            // First count up bits in each int group before this one (each int holds 32 bits which we can count up in a single bitCount call)
-            uint int_to_stop_at = get_bitfield_index(block_local_index);
-            uint sum_of_previous_bitfields = 0;
-            for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
-                sum_of_previous_bitfields += bitCount(digit_offset_bitfields[bucket_index][bitfield_index]);
-            }
-            // Only count digits to the left of this one by masking out bits to the left
-            uint bit = get_bitfield_bit(block_local_index);
-            uint mask = bit == 0 ? 0 : bit - 1;
-            sum_of_previous_bitfields += bitCount(digit_offset_bitfields[bucket_index][get_bitfield_index(block_local_index)] & mask);
-            // Now we have the full count
-            if (bucket_index == digit) {
-                digit_offset = sum_of_previous_bitfields;
-            }
+        // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
+        // First count up bits in each int group before this one (each int holds 32 bits which we can count up in a single bitCount call)
+        uint int_to_stop_at = get_bitfield_index(block_local_index);
+        uint sum_of_previous_bitfields = 0;
+        for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
+            sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][bitfield_index]);
         }
+        // Only count digits to the left of this one by masking out bits to the left
+        uint bit = get_bitfield_bit(block_local_index);
+        uint mask = bit == 0 ? 0 : bit - 1;
+        sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)] & mask);
+        // Now we have the full count
+        digit_offset = sum_of_previous_bitfields;
     }
 
     if (block_local_index < NUM_BUCKETS) {
