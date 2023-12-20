@@ -840,10 +840,10 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 
 			if (!sorted) {
-				/*System.out.println("keys:");
+				System.out.println("keys:");
 				for (int i = 0; i < N; i++) {
 					System.out.println(result_keys[i]);
-				}*/
+				}
 
 				/*System.out.println("DATA:");
 				for (int i = 0; i < N; i++) {

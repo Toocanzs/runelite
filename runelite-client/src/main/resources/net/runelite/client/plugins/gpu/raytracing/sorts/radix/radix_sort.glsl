@@ -28,8 +28,12 @@ layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
     uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
 };
 
+#define NUM_BITFIELD_INTS (THREAD_COUNT/32)
+
 shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily (must barrier zeroing)
-shared uint digit_offsets[NUM_BUCKETS][THREAD_COUNT];
+shared uint digit_offset_bitfields[NUM_BUCKETS][NUM_BITFIELD_INTS];
+shared uint digit_sums[NUM_BUCKETS];
+shared uint lookback_sums[NUM_BUCKETS];
 
 #define SPIN_WHILE(value_to_write_to, value_to_read_from, condition) \
     do {\
@@ -72,6 +76,16 @@ uint lookback_for_global_sum(uint block_id, uint bucket_index) {
     return global_sum;
 }
 
+uint get_bitfield_index(uint n) {
+    return n/32;
+}
+
+uint get_bitfield_bit(uint n) {
+    uint bit = n & 31;
+    return (1 << bit);
+}
+
+
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     // One thread grabs the next block by incrementing the block counter
@@ -87,8 +101,23 @@ void main() {
     uint block_start_index = block_id * block_size;
     uint block_local_index = gl_LocalInvocationID.x;
     uint input_array_index = block_start_index + block_local_index;
-    for (int i = 0; i < block_size; i++) {
-        digit_offsets[i][block_local_index] = 0;
+    /*if (block_local_index < NUM_BITFIELD_INTS) {
+        uint bitfield_index = block_local_index;
+        // Zero bitfields for each digit
+        for (int bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
+            digit_offset_bitfields[bucket_index][bitfield_index] = 0;
+            bitcounts[bucket_index][bitfield_index] = 0;
+        }
+    }*/
+
+    // Zero bitfields for each digit
+    if (block_local_index < NUM_BUCKETS) {
+        uint bucket_index = block_local_index;
+        for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) {
+            digit_offset_bitfields[bucket_index][bitfield_index] = 0;
+        }
+        digit_sums[bucket_index] = 0;
+        lookback_sums[bucket_index] = 0;
     }
 
     memoryBarrierShared();
@@ -107,44 +136,50 @@ void main() {
         digit_start_index = digit_start_indices[pass_number][digit];
         barrier();
         
-        digit_offsets[digit][block_local_index] = 1;
-        memoryBarrierShared();
-        barrier();
-
-        // For every bucket, compute an inclusive prefix sum across all elements
-        for (uint stride = 1; stride < block_size; stride <<= 1) {
-            uint values_to_add[NUM_BUCKETS];
-            for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-                if (block_local_index >= stride) {
-                    values_to_add[bucket_index] = digit_offsets[bucket_index][block_local_index - stride];
-                } else {
-                    values_to_add[bucket_index] = 0;
-                }
-            }
-            memoryBarrierShared();
-            barrier();
-            for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
-                if (values_to_add[bucket_index] != 0) {
-                    //atomicAdd(digit_offsets[bucket_index][block_local_index], values_to_add[bucket_index]); // NOTE: May need the atomic add later if we pack 4 counts into one uint
-                    digit_offsets[bucket_index][block_local_index] += values_to_add[bucket_index];
-                }
-            }
-            memoryBarrierShared();
-            barrier();
-        }
-
-        digit_offset = block_local_index == 0 ? 0 : digit_offsets[digit][block_local_index - 1];
+        atomicOr(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)], get_bitfield_bit(block_local_index));
     }
-    // Capture digit sum so we can overwrite digit_offsets for other shared memory stuff
-    uint digit_sum_at_local_index = block_local_index < NUM_BUCKETS ? digit_offsets[block_local_index][block_size-1] : 0;
-    // NOTE: From this point on digit_offsets is free to be used for anything else
+
+    memoryBarrierShared();
+    barrier();
+
+
+    if (input_array_index < num_items) {
+        for (uint bucket_index = 0; bucket_index < NUM_BUCKETS; bucket_index++) {
+            // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
+            // First count up bits in each int group before this one (each int holds 32 bits which we can count up in a single bitCount call)
+            uint int_to_stop_at = get_bitfield_index(block_local_index);
+            uint sum_of_previous_bitfields = 0;
+            for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
+                sum_of_previous_bitfields += bitCount(digit_offset_bitfields[bucket_index][bitfield_index]);
+            }
+            // Only count digits to the left of this one by masking out bits to the left
+            uint bit = get_bitfield_bit(block_local_index);
+            uint mask = bit == 0 ? 0 : bit - 1;
+            sum_of_previous_bitfields += bitCount(digit_offset_bitfields[bucket_index][get_bitfield_index(block_local_index)] & mask);
+            // Now we have the full count
+            if (bucket_index == digit) {
+                digit_offset = sum_of_previous_bitfields;
+            }
+        }
+    }
+
+    if (block_local_index < NUM_BUCKETS) {
+        uint bucket_index = block_local_index;
+
+        uint digit_sum = 0;
+        for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) { // TODO: Technically we could continue the sum above instead of doing a second loop, if we care
+            digit_sum += bitCount(digit_offset_bitfields[bucket_index][bitfield_index]);
+        }
+        digit_sums[bucket_index] = digit_sum;
+    }
+
     memoryBarrierShared();
     barrier();
 
     if (block_local_index < NUM_BUCKETS) {
         // Write out the partial sum for this block, for every bucket
         uint bucket_index = block_local_index;
-        uint value_to_write = digit_sum_at_local_index; // Last element of offsets holds the sum
+        uint value_to_write = digit_sums[block_local_index]; // Last element of offsets holds the sum
         uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // First block is a global sum since no other blocks exsit to the left
         atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
     }
@@ -158,11 +193,11 @@ void main() {
             uint lookback_sum = lookback_for_global_sum(block_id, bucket_index);
 
             // Write out the global sum for this block now that we know it
-            uint value_to_write = digit_sum_at_local_index + lookback_sum;
+            uint value_to_write = digit_sums[block_local_index] + lookback_sum;
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
 
             // Write lookback result to shared memory so we can grab it later for when we want to know the sum for a single digit
-            digit_offsets[bucket_index][0] = lookback_sum; // Reusing the shared memory to reduce the amount we have declared
+            lookback_sums[bucket_index] = lookback_sum; // Reusing the shared memory to reduce the amount we have declared
         }
         memoryBarrier();
         barrier();
@@ -174,18 +209,18 @@ void main() {
     if (input_array_index < num_items) {
         uint digit_local_offset = 0;
         if (block_id != 0) {
-            // Note digit_offsets[digit][0] is actually the sum of the number of occurrences of this digit to the left of this block. We're reusing the shared memory from before
-            digit_local_offset = digit_offsets[digit][0];
+            // Note digit_offset_bitfields[digit][0] is actually the sum of the number of occurrences of this digit to the left of this block. We're reusing the shared memory from before
+            digit_local_offset = lookback_sums[digit];
         }
 
         barrier();
 
-        uint output_index = digit_start_index + digit_offset + digit_local_offset;
+        uint output_index = digit_start_index + digit_offset + digit_local_offset; 
         destination_keys[output_index] = input_key;
     }
 }
 
-// digit_offsets is eventually going to tell us how much to offset this digit by to maintain the order
+// digit_offset_bitfields is eventually going to tell us how much to offset this digit by to maintain the order
 // that the items appeared in in the original array (making it a so-called "stable" sort)
 // In order to generate that offset table, we would need to know exactly how many instances of the digit we want to place
 // have appeared before us in the input array
