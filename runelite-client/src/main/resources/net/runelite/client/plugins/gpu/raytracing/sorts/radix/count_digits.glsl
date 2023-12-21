@@ -21,6 +21,10 @@ layout(std430, binding = 2) restrict buffer _output {
 
 shared uint shared_digit_counts[NUM_PASSES][NUM_BUCKETS];
 
+#if NUM_BUCKETS > THREAD_COUNT
+#error "Code assumes that NUM_BUCKETS > THREAD_COUNT in every if (block_local_index < NUM_BUCKETS). Must be rewritten if this assumption is broken"
+#endif
+
 // call with glDispatchCompute(numBlocks,numPasses,1)
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
@@ -28,6 +32,7 @@ void main() {
         shared_digit_counts[gl_GlobalInvocationID.y][gl_LocalInvocationID.x] = 0;
     }
 
+    groupMemoryBarrier();
     barrier();
 
     if (gl_GlobalInvocationID.x < num_items) { // TODO: 2d group size so we can go over 65k blocks on x
@@ -43,6 +48,7 @@ void main() {
         atomicAdd(shared_digit_counts[pass_number][digit], 1);
     }
 
+    groupMemoryBarrier();
     barrier();
 
     // Write local counts to global memory

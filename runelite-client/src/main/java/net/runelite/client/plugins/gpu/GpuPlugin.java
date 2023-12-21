@@ -648,6 +648,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			if (useRadix) {
 				final int radixWorkGroupSize = 256;
+				// NOTE: For whatever reason, 4 bits per pass is faster than 8.
+				// I've read multiple accounts of 8 bits per pass being faster for other people, so unsure what the issue is here, although it's plenty fast
 				final int bitsPerPass = 4;
 				final int numPasses = 32/bitsPerPass;
 				final int numBuckets = 1 << bitsPerPass;

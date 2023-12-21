@@ -155,7 +155,7 @@ void main() {
         uint bucket_index = block_local_index;
 
         uint digit_sum = 0;
-        for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) { // TODO: Technically we could continue the sum above instead of doing a second loop, if we care
+        for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) {
             digit_sum += bitCount(digit_offset_bitfields[bucket_index][bitfield_index]);
         }
 
@@ -171,7 +171,7 @@ void main() {
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
 
             // Write lookback result to shared memory so we can grab it later for when we want to know the sum for a single digit
-            atomicExchange(lookback_sums[bucket_index], lookback_sum);
+            lookback_sums[bucket_index] = lookback_sum;
         }
     }
 
