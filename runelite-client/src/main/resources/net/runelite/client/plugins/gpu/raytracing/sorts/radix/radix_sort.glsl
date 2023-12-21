@@ -82,6 +82,9 @@ uint get_bitfield_bit(uint n) {
     return (1 << bit);
 }
 
+#if NUM_BUCKETS > THREAD_COUNT
+#error "Code assumes that NUM_BUCKETS > THREAD_COUNT in every if (block_local_index < NUM_BUCKETS). Must be rewritten if this assumption is broken"
+#endif
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
@@ -122,7 +125,7 @@ void main() {
 
     if (input_array_index < num_items) {
         input_key = source_keys[input_array_index];
-        uint value = values[input_key];
+        uint value = values[input_key]; 
         digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         digit_start_index = digit_start_indices[pass_number][digit];
         atomicOr(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)], get_bitfield_bit(block_local_index));
@@ -148,7 +151,7 @@ void main() {
         digit_offset = sum_of_previous_bitfields;
     }
 
-    if (block_local_index < NUM_BUCKETS) {
+    if (block_local_index < NUM_BUCKETS) { // NOTE: Assumes NUM_BUCKETS <= local_size_x
         uint bucket_index = block_local_index;
 
         uint digit_sum = 0;
@@ -172,7 +175,7 @@ void main() {
         }
     }
 
-    // wait for lookback_sums
+    // Wait for lookback_sums
     groupMemoryBarrier();
     barrier();
 
