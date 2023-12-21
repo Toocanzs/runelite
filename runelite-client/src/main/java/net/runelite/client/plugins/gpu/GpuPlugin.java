@@ -649,7 +649,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			if (useRadix) {
 				final int radixWorkGroupSize = 512;
 				// NOTE: For whatever reason, 4 bits per pass is faster than 8.
-				// I've read multiple accounts of 8 bits per pass being faster for other people, so unsure what the issue is here, although it's plenty fast
+				// I've read multiple accounts of 8 bits per pass being faster for other people so unsure what the issue is here, although it's plenty fast already
 				final int bitsPerPass = 4;
 				final int numPasses = 32/bitsPerPass;
 				final int numBuckets = 1 << bitsPerPass;
@@ -812,6 +812,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			long[] result = new long[1];
 			GL43C.glGetQueryObjectui64v(query_object, GL43C.GL_QUERY_RESULT, result);
+			GL43C.glDeleteQueries(query_object);
 			double ms = (result[0] / 1e6);
 			System.out.println("Sorted "+N+" in " + ms + "ms");
 			double seconds = ms*0.001;
