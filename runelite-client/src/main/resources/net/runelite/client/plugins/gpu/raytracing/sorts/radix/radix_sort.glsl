@@ -32,7 +32,6 @@ layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
 
 shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily (must barrier zeroing)
 shared uint digit_offset_bitfields[NUM_BUCKETS][NUM_BITFIELD_INTS];
-shared uint digit_sums[NUM_BUCKETS];
 shared uint lookback_sums[NUM_BUCKETS];
 
 #define SPIN_WHILE(value_to_write_to, value_to_read_from, condition) \
@@ -50,8 +49,6 @@ shared uint lookback_sums[NUM_BUCKETS];
 #define STATUS_GLOBAL_SUM_BIT (1 << 31)
 
 uint lookback_for_global_sum(uint block_id, uint bucket_index) {
-    memoryBarrier();
-    barrier();
     // Decoupled lookback
     // Basically go back a block at a time, read the value,
     // if it's a partial sum, add it to the running global sum
@@ -88,12 +85,14 @@ uint get_bitfield_bit(uint n) {
 
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
-    // One thread grabs the next block by incrementing the block counter
+    // One therad grabs the next block by incrementing the block counter
     if (gl_LocalInvocationID.x == 0) {
         // Written to shared memory so everyone can see which block they're in
         group_block_id = atomicAdd(block_counter, 1);
     }
-    memoryBarrierShared();
+
+    // Wait for group block id
+    groupMemoryBarrier();
     barrier();
 
     uint block_id = group_block_id;
@@ -108,11 +107,11 @@ void main() {
         for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) {
             digit_offset_bitfields[bucket_index][bitfield_index] = 0;
         }
-        digit_sums[bucket_index] = 0;
         lookback_sums[bucket_index] = 0;
     }
 
-    memoryBarrierShared();
+    // Wait for zeroing shared memory
+    groupMemoryBarrier();
     barrier();
 
     // These values will be filled in if input_array_index < num_items, and only be used in a separate if input_array_index < num_items
@@ -126,14 +125,12 @@ void main() {
         uint value = values[input_key];
         digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         digit_start_index = digit_start_indices[pass_number][digit];
-        barrier();
-        
         atomicOr(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)], get_bitfield_bit(block_local_index));
     }
 
-    memoryBarrierShared();
+    // Wait for atomics
+    groupMemoryBarrier();
     barrier();
-
 
     if (input_array_index < num_items) {
         // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
@@ -158,50 +155,32 @@ void main() {
         for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) { // TODO: Technically we could continue the sum above instead of doing a second loop, if we care
             digit_sum += bitCount(digit_offset_bitfields[bucket_index][bitfield_index]);
         }
-        digit_sums[bucket_index] = digit_sum;
-    }
 
-    memoryBarrierShared();
-    barrier();
-
-    if (block_local_index < NUM_BUCKETS) {
-        // Write out the partial sum for this block, for every bucket
-        uint bucket_index = block_local_index;
-        uint value_to_write = digit_sums[block_local_index]; // Last element of offsets holds the sum
+        // Write out the partial sum now that we know it
         uint bit = block_id == 0 ? STATUS_GLOBAL_SUM_BIT : STATUS_PARTIAL_SUM_BIT; // First block is a global sum since no other blocks exsit to the left
-        atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (value_to_write & STATUS_VALUE_BITMASK));
-    }
-    memoryBarrier();
-    barrier();
+        atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], bit | (digit_sum & STATUS_VALUE_BITMASK));
 
-    uint digit_local_offset = 0;
-    if (block_id != 0) {
-        if (block_local_index < NUM_BUCKETS) {
-            uint bucket_index = block_local_index;
+        if (block_id != 0) {
             uint lookback_sum = lookback_for_global_sum(block_id, bucket_index);
 
             // Write out the global sum for this block now that we know it
-            uint value_to_write = digit_sums[block_local_index] + lookback_sum;
+            uint value_to_write = digit_sum + lookback_sum;
             atomicExchange(status_and_sum[block_id * NUM_BUCKETS + bucket_index], STATUS_GLOBAL_SUM_BIT | (value_to_write & STATUS_VALUE_BITMASK));
 
             // Write lookback result to shared memory so we can grab it later for when we want to know the sum for a single digit
-            lookback_sums[bucket_index] = lookback_sum; // Reusing the shared memory to reduce the amount we have declared
+            atomicExchange(lookback_sums[bucket_index], lookback_sum);
         }
-        memoryBarrier();
-        barrier();
     }
-    
-    memoryBarrier();
+
+    // wait for lookback_sums
+    groupMemoryBarrier();
     barrier();
 
     if (input_array_index < num_items) {
         uint digit_local_offset = 0;
         if (block_id != 0) {
-            // Note digit_offset_bitfields[digit][0] is actually the sum of the number of occurrences of this digit to the left of this block. We're reusing the shared memory from before
-            digit_local_offset = lookback_sums[digit];
+            digit_local_offset = atomicCompSwap(lookback_sums[digit], 0, 0);
         }
-
-        barrier();
 
         uint output_index = digit_start_index + digit_offset + digit_local_offset; 
         destination_keys[output_index] = input_key;
