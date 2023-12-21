@@ -128,6 +128,12 @@ void main() {
         uint value = values[input_key]; 
         digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         digit_start_index = digit_start_indices[pass_number][digit];
+        // Construct a bitfield for every digit which has either a 1 if that element contains that digit or a zero if not.
+        // In other words for digit 3 and an input array of 
+        // [3,2,7,1,9,4,7,3,3,1]
+        // We generate a bitfield
+        // [1,0,0,0,0,0,0,1,1,0]
+        // But this is packed into uints instead of a whole 32 bit 1 or 0 for each element
         atomicOr(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)], get_bitfield_bit(block_local_index));
     }
 
@@ -137,7 +143,7 @@ void main() {
 
     if (input_array_index < num_items) {
         // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
-        // First count up bits in each int group before this one (each int holds 32 bits which we can count up in a single bitCount call)
+        // First count up bits in each int group before this one (each int holds 32 bits which we can count up all 32 in a single bitCount call)
         uint int_to_stop_at = get_bitfield_index(block_local_index);
         uint sum_of_previous_bitfields = 0;
         for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
@@ -151,9 +157,10 @@ void main() {
         digit_offset = sum_of_previous_bitfields;
     }
 
-    if (block_local_index < NUM_BUCKETS) { // NOTE: Assumes NUM_BUCKETS <= local_size_x
+    if (block_local_index < NUM_BUCKETS) {
         uint bucket_index = block_local_index;
 
+        // Get the number of times this digit occurs in the whole group
         uint digit_sum = 0;
         for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) {
             digit_sum += bitCount(digit_offset_bitfields[bucket_index][bitfield_index]);
@@ -182,7 +189,7 @@ void main() {
     if (input_array_index < num_items) {
         uint digit_local_offset = 0;
         if (block_id != 0) {
-            digit_local_offset = atomicCompSwap(lookback_sums[digit], 0, 0);
+            digit_local_offset = lookback_sums[digit];
         }
 
         uint output_index = digit_start_index + digit_offset + digit_local_offset; 
