@@ -736,8 +736,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, values_buffer);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, start_indices_buffer);
 
-					checkGLErrors();
-
 					for (int pass_number = 0; pass_number < numPasses; pass_number++) { // TODO: Inconsistent naming
 						GL43C.glUniform1ui(uRadixPassNumber, pass_number);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, keys_buffer);
