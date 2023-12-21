@@ -23,8 +23,10 @@ void main() {
     // Hillis & Steele inclusive scan
     for (uint stride = 1; stride < NUM_BUCKETS; stride <<= 1) {
         uint temp = bucket_index >= stride ? digit_start_indices[pass_number][bucket_index - stride] : 0;
+        groupMemoryBarrier();
         barrier();
         digit_start_indices[pass_number][bucket_index] += temp;
+        groupMemoryBarrier();
         barrier();
     }
 
@@ -33,6 +35,7 @@ void main() {
     if (bucket_index > 0) {
         temp =  digit_start_indices[pass_number][bucket_index - 1];
     }
+    groupMemoryBarrier();
     barrier();
     digit_start_indices[pass_number][bucket_index] = temp;
 }

@@ -56,7 +56,7 @@ uint lookback_for_global_sum(uint block_id, uint bucket_index) {
     // This will give us a bit faster of an answer rather than waiting for the block to the left to output it's global sum 
     // Roughly 3x faster than just waiting for previous block to update it's value
     uint global_sum = 0;
-    uint previous_block_index = (block_id - 1);
+    uint previous_block_index = max(int(block_id) - 1, 0);
     while (true) {
         uint control_value;
         SPIN_WHILE_ZERO(control_value, status_and_sum[previous_block_index * NUM_BUCKETS + bucket_index]);
@@ -65,7 +65,7 @@ uint lookback_for_global_sum(uint block_id, uint bucket_index) {
             break;
         }
         if ((control_value & STATUS_PARTIAL_SUM_BIT) != 0) {
-            previous_block_index = max(previous_block_index - 1, 0); // NOTE: We rely on the first block always returning a global sum so this doesn't go on forever
+            previous_block_index = max(int(previous_block_index) - 1, 0); // NOTE: We rely on the first block always returning a global sum so this doesn't go on forever
             global_sum += control_value & STATUS_VALUE_BITMASK;
         }
     }
