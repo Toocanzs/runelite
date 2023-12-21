@@ -8,7 +8,7 @@ layout(std430, binding = 0) restrict buffer _output {
     uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
 };
 
-// Call with glDispatch(1,1,1)
+// Call with glDispatch(1,numPasses,1)
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     // If we take our digit counts and perform an exclusive prefix sum on it
@@ -17,12 +17,22 @@ void main() {
     // That's why we need digit offsets
     // So our final index for any particular element will be digit_start_indices[digit] + digit_offset[digit][i]
 
-    // The prefix sum is so small that we just calculate it sequentially for each pass
-    uint pass_number = gl_LocalInvocationID.x; // group size == 32/BITS_PER_PASS so no need to check if in bounds
-    uint sum = 0;
-    for (int i = 0; i < NUM_BUCKETS; i++) {
-        uint c = digit_start_indices[pass_number][i];
-        digit_start_indices[pass_number][i] = sum;
-        sum += c;
+    uint pass_number = gl_WorkGroupID.y; 
+    uint bucket_index = gl_LocalInvocationID.x;
+
+    // Hillis & Steele inclusive scan
+    for (uint stride = 1; stride < NUM_BUCKETS; stride <<= 1) {
+        uint temp = bucket_index >= stride ? digit_start_indices[pass_number][bucket_index - stride] : 0;
+        barrier();
+        digit_start_indices[pass_number][bucket_index] += temp;
+        barrier();
     }
+
+    // Convert to exclusive by shifting over 1 to the right, and inserting a zero at the start
+    uint temp = 0;
+    if (bucket_index > 0) {
+        temp =  digit_start_indices[pass_number][bucket_index - 1];
+    }
+    barrier();
+    digit_start_indices[pass_number][bucket_index] = temp;
 }

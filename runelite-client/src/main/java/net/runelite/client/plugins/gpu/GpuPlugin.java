@@ -655,7 +655,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 				glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
-				glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createTemplate(numPasses, -1)); // Thread config is not used here
+				glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createTemplate(numBuckets, -1)); // Thread config is not used here
 
 				final int[] keys = new int[N];
 				for (int i = 0; i < N; i++) {
@@ -715,7 +715,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					{ // Compute start indices for each digit, for each pass, by calculating the prefix sum of digit counts
 						GL43C.glUseProgram(glRadixComputeStartIndices);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, start_indices_buffer);
-						GL43C.glDispatchCompute(1, 1, 1);
+						GL43C.glDispatchCompute(1, numPasses, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 					}
 
