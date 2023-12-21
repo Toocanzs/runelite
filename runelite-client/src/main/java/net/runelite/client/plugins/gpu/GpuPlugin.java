@@ -642,7 +642,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				values[i] = r;
 			}
 
-			final int query_object = GL43C.glGenQueries();
+			int[] queries = new int[4];
+			GL43C.glGenQueries(queries);
 			int keys_buffer = GL43C.glGenBuffers();
 			boolean useRadix = true;
 
@@ -701,7 +702,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
 
 				{
-					GL43C.glBeginQuery(GL43C.GL_TIME_ELAPSED, query_object);
+					GL43C.glQueryCounter(queries[0], GL43C.GL_TIMESTAMP);
 
 					{ // Count the digits in the dataset, one set of counts per pass
 						GL43C.glUseProgram(glRadixCountDigitsProgram);
@@ -712,14 +713,22 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 						GL43C.glDispatchCompute(numBlocks, numPasses, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+						GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
 					}
 
 					{ // Compute start indices for each digit, for each pass, by calculating the prefix sum of digit counts
+						GL43C.glQueryCounter(queries[1], GL43C.GL_TIMESTAMP);
+
 						GL43C.glUseProgram(glRadixComputeStartIndices);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, start_indices_buffer);
 						GL43C.glDispatchCompute(1, numPasses, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+						GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
 					}
+
+					GL43C.glQueryCounter(queries[2], GL43C.GL_TIMESTAMP);
 
 					GL43C.glUseProgram(glRadixSortProgram);
 					GL43C.glUniform1ui(uRadixNumItems, N);
@@ -743,7 +752,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						temp_keys_buffer = temp;
 					}
 
-					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
+					GL43C.glQueryCounter(queries[3], GL43C.GL_TIMESTAMP);
 				}
 
 				GL43C.glDeleteBuffers(values_buffer); // TODO: We wouldn't actually destroy this here
@@ -777,7 +786,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				int uBitonicBlock = GL43C.glGetUniformLocation(glBitonicSortProgram, "block");
 
 				{
-					GL43C.glBeginQuery(GL43C.GL_TIME_ELAPSED, query_object);
+					GL43C.glQueryCounter(queries[0], GL43C.GL_TIMESTAMP);
+					GL43C.glQueryCounter(queries[1], GL43C.GL_TIMESTAMP); // unused
+					GL43C.glQueryCounter(queries[2], GL43C.GL_TIMESTAMP); // unused
 
 
 					// Run the setup program, setting up keys and filling padding values
@@ -804,18 +815,40 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						}
 					}
 
-					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
+					GL43C.glQueryCounter(queries[3], GL43C.GL_TIMESTAMP);
 				}
 
 				GL43C.glDeleteBuffers(values_buffer);
 			}
 
 			long[] result = new long[1];
-			GL43C.glGetQueryObjectui64v(query_object, GL43C.GL_QUERY_RESULT, result);
-			GL43C.glDeleteQueries(query_object);
-			double ms = (result[0] / 1e6);
-			System.out.println("Sorted "+N+" in " + ms + "ms");
-			double seconds = ms*0.001;
+			GL43C.glGetQueryObjectui64v(queries[0], GL43C.GL_QUERY_RESULT, result);
+			long oneNs = result[0];
+
+			GL43C.glGetQueryObjectui64v(queries[1], GL43C.GL_QUERY_RESULT, result);
+			long twoNs = result[0];
+
+			GL43C.glGetQueryObjectui64v(queries[2], GL43C.GL_QUERY_RESULT, result);
+			long threeNs = result[0];
+
+			GL43C.glGetQueryObjectui64v(queries[3], GL43C.GL_QUERY_RESULT, result);
+			long fourNs = result[0];
+
+			for (int i = 0; i < queries.length; i++) {
+				GL43C.glDeleteQueries(queries[i]);
+			}
+
+			double oneTwoMs = (twoNs - oneNs) / 1e6;
+			double twoThreeMs = (threeNs - twoNs) / 1e6;
+			double threeFourMs = (fourNs - threeNs) / 1e6;
+
+			double oneFourMs = (fourNs - oneNs) / 1e6;
+
+			System.out.println("Sorted "+N+" in " + oneFourMs + "ms");
+			System.out.println("\tCount: " + oneTwoMs + "ms");
+			System.out.println("\tPrefix: " + twoThreeMs + "ms");
+			System.out.println("\tRadix: " + threeFourMs + "ms");
+			double seconds = oneFourMs*0.001;
 			double itemsPerSecond = N/seconds;
 			double gigaItemsPerSecond = itemsPerSecond * 1e-9;
 			double gigaBytesPerSecond = gigaItemsPerSecond * 4;
