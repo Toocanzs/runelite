@@ -7,24 +7,25 @@
 uniform uint num_items;
 uniform uint pass_number;
 
-layout(std430, binding = 0) restrict readonly buffer _values {
-    uint values[];
+struct KeyValue {
+    uint key;
+    uint value;
 };
 
-layout(std430, binding = 1) restrict readonly buffer _source_keys {
-    uint source_keys[];
+layout(std430, binding = 0) restrict readonly buffer _source_key_values {
+    KeyValue source_key_values[];
 };
 
-layout(std430, binding = 2) restrict writeonly buffer _destination_keys {
-    uint destination_keys[];
+layout(std430, binding = 1) restrict writeonly buffer _destination_key_values {
+    KeyValue destination_key_values[];
 };
 
-layout(std430, binding = 3) restrict buffer _control {
+layout(std430, binding = 2) restrict buffer _control {
     volatile uint block_counter;
     volatile uint status_and_sum[];/*[NUM_BLOCKS][NUM_BUCKETS]*/
 };
 
-layout(std430, binding = 4) restrict readonly buffer _digit_start_indices {
+layout(std430, binding = 3) restrict readonly buffer _digit_start_indices {
     uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
 };
 
@@ -121,12 +122,12 @@ void main() {
     uint digit = 0;
     uint digit_start_index = 0;
     uint digit_offset = 0;
-    uint input_key = 0;
+
+    KeyValue input_key_value = KeyValue(0,0);
 
     if (input_array_index < num_items) {
-        input_key = source_keys[input_array_index];
-        uint value = values[input_key]; 
-        digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
+        input_key_value = source_key_values[input_array_index];
+        digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         digit_start_index = digit_start_indices[pass_number][digit];
         // Construct a bitfield for every digit which has either a 1 if that element contains that digit or a zero if not.
         // In other words for digit 3 and an input array of 
@@ -193,7 +194,8 @@ void main() {
         }
 
         uint output_index = digit_start_index + digit_offset + digit_local_offset; 
-        destination_keys[output_index] = input_key;
+        
+        destination_key_values[output_index] = input_key_value;
     }
 }
 

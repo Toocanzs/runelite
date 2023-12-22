@@ -7,15 +7,16 @@
 
 uniform uint num_items;
 
-layout(std430, binding = 0) restrict readonly buffer _values {
-    uint values[];
+struct KeyValue {
+    uint key;
+    uint value;
 };
 
-layout(std430, binding = 1) restrict readonly buffer _keys {
-    uint keys[];
+layout(std430, binding = 0) restrict readonly buffer _key_values {
+    KeyValue key_values[];
 };
 
-layout(std430, binding = 2) restrict buffer _output {
+layout(std430, binding = 1) restrict buffer _output {
     uint digit_counts[NUM_PASSES][NUM_BUCKETS];
 };
 
@@ -43,8 +44,7 @@ void main() {
         // If BITS_PER_PASS == 4, then it is actually a hex digit
         uint index = gl_GlobalInvocationID.x;
         uint pass_number = gl_GlobalInvocationID.y; // glDispatchCompute(numBlocks,numPasses,1), so y will be the pass number
-        uint value = values[keys[index]];
-        uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
+        uint digit = (key_values[index].value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         atomicAdd(shared_digit_counts[pass_number][digit], 1);
     }
 
