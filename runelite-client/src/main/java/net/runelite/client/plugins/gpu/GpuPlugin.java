@@ -628,7 +628,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			final int N = 1000000;
+			final int N = 20000000;
 
 			final int[] keyValues = new int[N*2];
 			Random random = new Random();
@@ -703,7 +703,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, inputKeyValuesBuffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, start_indices_buffer);
 
-						GL43C.glDispatchCompute(numBlocks, numPasses, 1);
+						GL43C.glDispatchCompute(numBlocks, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 						GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);

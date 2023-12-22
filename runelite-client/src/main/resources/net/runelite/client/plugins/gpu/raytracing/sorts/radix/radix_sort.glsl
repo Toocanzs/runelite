@@ -194,7 +194,6 @@ void main() {
         }
 
         uint output_index = digit_start_index + digit_offset + digit_local_offset; 
-        
         destination_key_values[output_index] = input_key_value;
     }
 }

@@ -30,7 +30,9 @@ shared uint shared_digit_counts[NUM_PASSES][NUM_BUCKETS];
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     if (gl_LocalInvocationID.x < NUM_BUCKETS) {
-        shared_digit_counts[gl_GlobalInvocationID.y][gl_LocalInvocationID.x] = 0;
+        for (uint pass_number = 0; pass_number < NUM_PASSES; pass_number++) {
+            shared_digit_counts[pass_number][gl_LocalInvocationID.x] = 0;
+        }
     }
 
     groupMemoryBarrier();
@@ -43,9 +45,11 @@ void main() {
         // Think of it like a hex digit where each digit represents 0 to 15
         // If BITS_PER_PASS == 4, then it is actually a hex digit
         uint index = gl_GlobalInvocationID.x;
-        uint pass_number = gl_GlobalInvocationID.y; // glDispatchCompute(numBlocks,numPasses,1), so y will be the pass number
-        uint digit = (key_values[index].value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-        atomicAdd(shared_digit_counts[pass_number][digit], 1);
+        uint value = key_values[index].value;
+        for (uint pass_number = 0; pass_number < NUM_PASSES; pass_number++) {
+            uint digit = (value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
+            atomicAdd(shared_digit_counts[pass_number][digit], 1);
+        }
     }
 
     groupMemoryBarrier();
@@ -57,10 +61,10 @@ void main() {
     // and then just once for the 0th digit count to global memory. Amounted to a ~17% speedup at the time of writing
     if (gl_LocalInvocationID.x < NUM_BUCKETS) {
         uint bucket_index = gl_LocalInvocationID.x;
-        uint pass_number = gl_GlobalInvocationID.y;
-
-        if (shared_digit_counts[pass_number][gl_LocalInvocationID.x] > 0) {
-            atomicAdd(digit_counts[pass_number][bucket_index], shared_digit_counts[pass_number][bucket_index]);
+        for (uint pass_number = 0; pass_number < NUM_PASSES; pass_number++) {
+            if (shared_digit_counts[pass_number][gl_LocalInvocationID.x] > 0) {
+                atomicAdd(digit_counts[pass_number][bucket_index], shared_digit_counts[pass_number][bucket_index]);
+            }
         }
     }
 }
