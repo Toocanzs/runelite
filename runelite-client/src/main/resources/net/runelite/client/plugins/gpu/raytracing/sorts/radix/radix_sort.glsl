@@ -53,7 +53,7 @@ uint lookback_for_global_sum(uint block_id, uint bucket_index) {
     // Decoupled lookback
     // Basically go back a block at a time, read the value,
     // if it's a partial sum, add it to the running global sum
-    // if it's a globla sum, that represents the sum of all values to the left (including the current one), so we add and break
+    // if it's a global sum, that represents the sum of all values to the left (including the current one), so we add and break
     // This will give us a bit faster of an answer rather than waiting for the block to the left to output it's global sum 
     // Roughly 3x faster than just waiting for previous block to update it's value
     uint global_sum = 0;

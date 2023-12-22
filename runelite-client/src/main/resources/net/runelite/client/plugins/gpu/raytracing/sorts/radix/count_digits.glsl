@@ -62,7 +62,7 @@ void main() {
     if (gl_LocalInvocationID.x < NUM_BUCKETS) {
         uint bucket_index = gl_LocalInvocationID.x;
         for (uint pass_number = 0; pass_number < NUM_PASSES; pass_number++) {
-            if (shared_digit_counts[pass_number][gl_LocalInvocationID.x] > 0) {
+            if (shared_digit_counts[pass_number][bucket_index] > 0) {
                 atomicAdd(digit_counts[pass_number][bucket_index], shared_digit_counts[pass_number][bucket_index]);
             }
         }
