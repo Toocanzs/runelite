@@ -26,7 +26,7 @@ shared uint shared_digit_counts[NUM_PASSES][NUM_BUCKETS];
 #error "Code assumes that NUM_BUCKETS > THREAD_COUNT in every if (block_local_index < NUM_BUCKETS). Must be rewritten if this assumption is broken"
 #endif
 
-// call with glDispatchCompute(numBlocks,numPasses,1)
+// call with glDispatchCompute(numBlocks,1,1)
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     if (gl_LocalInvocationID.x < NUM_BUCKETS) {

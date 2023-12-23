@@ -118,17 +118,9 @@ void main() {
     groupMemoryBarrier();
     barrier();
 
-    // These values will be filled in if input_array_index < num_items, and only be used in a separate if input_array_index < num_items
-    uint digit = 0;
-    uint digit_start_index = 0;
-    uint digit_offset = 0;
-
-    KeyValue input_key_value = KeyValue(0,0);
-
     if (input_array_index < num_items) {
-        input_key_value = source_key_values[input_array_index];
-        digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-        digit_start_index = digit_start_indices[pass_number][digit];
+        KeyValue input_key_value = source_key_values[input_array_index];
+        uint digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         // Construct a bitfield for every digit which has either a 1 if that element contains that digit or a zero if not.
         // In other words for digit 3 and an input array of 
         // [3,2,7,1,9,4,7,3,3,1]
@@ -141,22 +133,6 @@ void main() {
     // Wait for atomics
     groupMemoryBarrier();
     barrier();
-
-    if (input_array_index < num_items) {
-        // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
-        // First count up bits in each int group before this one (each int holds 32 bits which we can count up all 32 in a single bitCount call)
-        uint int_to_stop_at = get_bitfield_index(block_local_index);
-        uint sum_of_previous_bitfields = 0;
-        for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
-            sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][bitfield_index]);
-        }
-        // Only count digits to the left of this one by masking out bits to the left
-        uint bit = get_bitfield_bit(block_local_index);
-        uint mask = bit == 0 ? 0 : bit - 1;
-        sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)] & mask);
-        // Now we have the full count
-        digit_offset = sum_of_previous_bitfields;
-    }
 
     if (block_local_index < NUM_BUCKETS) {
         uint bucket_index = block_local_index;
@@ -188,10 +164,28 @@ void main() {
     barrier();
 
     if (input_array_index < num_items) {
+        KeyValue input_key_value = source_key_values[input_array_index];
+
+        uint digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         uint digit_local_offset = 0;
         if (block_id != 0) {
             digit_local_offset = lookback_sums[digit];
         }
+        uint digit_start_index = digit_start_indices[pass_number][digit];
+
+        // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
+        // First count up bits in each int group before this one (each int holds 32 bits which we can count up all 32 in a single bitCount call)
+        uint int_to_stop_at = get_bitfield_index(block_local_index);
+        uint sum_of_previous_bitfields = 0;
+        for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
+            sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][bitfield_index]);
+        }
+        // Only count digits to the left of this one by masking out bits to the left
+        uint bit = get_bitfield_bit(block_local_index);
+        uint mask = bit == 0 ? 0 : bit - 1;
+        sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)] & mask);
+        // Now we have the full count
+        uint digit_offset = sum_of_previous_bitfields;
 
         uint output_index = digit_start_index + digit_offset + digit_local_offset; 
         destination_key_values[output_index] = input_key_value;
