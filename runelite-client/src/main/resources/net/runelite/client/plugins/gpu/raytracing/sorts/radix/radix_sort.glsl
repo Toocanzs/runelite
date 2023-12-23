@@ -162,14 +162,8 @@ void main() {
 
     if (input_array_index < num_items) {
         KeyValue input_key_value = source_key_values[input_array_index];
-
         uint digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
-        uint digit_local_offset = 0;
-        if (block_id != 0) {
-            digit_local_offset = lookback_sums[digit];
-        }
-        uint digit_start_index = digit_start_indices[pass_number][digit];
-
+        
         // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
         // First count up bits in each int group before this one (each int holds 32 bits which we can count up all 32 in a single bitCount call)
         uint int_to_stop_at = get_bitfield_index(block_local_index);
@@ -182,9 +176,15 @@ void main() {
         uint mask = bit == 0 ? 0 : bit - 1;
         sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)] & mask);
         // Now we have the full count
-        uint digit_offset = sum_of_previous_bitfields;
+        uint block_relative_digit_offset = sum_of_previous_bitfields;
 
-        uint output_index = digit_start_index + digit_offset + digit_local_offset; 
+        uint global_prefix_digit_count = 0;
+        if (block_id != 0) {
+            global_prefix_digit_count = lookback_sums[digit];
+        }
+        uint digit_start_index = digit_start_indices[pass_number][digit];
+
+        uint output_index = digit_start_index + block_relative_digit_offset + global_prefix_digit_count; 
         destination_key_values[output_index] = input_key_value;
     }
 }
