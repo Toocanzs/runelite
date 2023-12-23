@@ -95,15 +95,8 @@ void main() {
         group_block_id = atomicAdd(block_counter, 1);
     }
 
-    // Wait for group block id
-    groupMemoryBarrier();
-    barrier();
-
-    uint block_id = group_block_id;
     uint block_size = gl_WorkGroupSize.x;
-    uint block_start_index = block_id * block_size;
     uint block_local_index = gl_LocalInvocationID.x;
-    uint input_array_index = block_start_index + block_local_index;
 
     // Zero shared memory
     if (block_local_index < NUM_BUCKETS) {
@@ -114,9 +107,13 @@ void main() {
         lookback_sums[bucket_index] = 0;
     }
 
-    // Wait for zeroing shared memory
+    // Wait for group block id
     groupMemoryBarrier();
     barrier();
+
+    uint block_id = group_block_id;
+    uint block_start_index = block_id * block_size;
+    uint input_array_index = block_start_index + block_local_index;
 
     if (input_array_index < num_items) {
         KeyValue input_key_value = source_key_values[input_array_index];
