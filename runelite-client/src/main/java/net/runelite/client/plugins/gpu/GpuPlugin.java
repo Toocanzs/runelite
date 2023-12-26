@@ -628,7 +628,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			final int N = 20000000;
+			final int N = 5000;
 
 			final int[] keyValues = new int[N*2];
 			Random random = new Random();
@@ -648,13 +648,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			int inputKeyValuesBuffer = GL43C.glGenBuffers();
 
 			{
-				final int radixWorkGroupSize = 512;
+				final int radixWorkGroupSize = 256;
 				// NOTE: For whatever reason, 4 bits per pass is faster than 8.
 				// I've read multiple accounts of 8 bits per pass being faster for other people so unsure what the issue is here, although it's plenty fast already
 				final int bitsPerPass = 4;
 				final int numPasses = 32/bitsPerPass;
 				final int numBuckets = 1 << bitsPerPass;
-				final int numBlocks = (N + radixWorkGroupSize - 1) / radixWorkGroupSize;
+				final int countNumBlocks = (N + radixWorkGroupSize - 1) / radixWorkGroupSize;
+
+				final int numItemsPerThread = 32;
+				final int radixNumBlocks = ((N/numItemsPerThread) + radixWorkGroupSize - 1) / radixWorkGroupSize;
 
 				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
 				glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
@@ -673,7 +676,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				final int control_buffer = GL43C.glGenBuffers();
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, control_buffer);
 				// 1 int for the block counter, and then an int array of size [numBlocks][numBuckets]
-				final int singleControlBufferSizeUnaligned = (4*1 + 4*numBlocks*numBuckets);
+				final int singleControlBufferSizeUnaligned = (4*1 + 4*radixNumBlocks*numBuckets);
 				// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
 				final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
 				// So we round up to the nearest multiple of that
@@ -703,7 +706,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, inputKeyValuesBuffer);
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, start_indices_buffer);
 
-						GL43C.glDispatchCompute(numBlocks, 1, 1);
+						GL43C.glDispatchCompute(countNumBlocks, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 						GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
@@ -734,7 +737,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, tempKeyValuesBuffer);
 						// Shift over the control buffer to the one corresponding to this pass
 						GL43C.glBindBufferRange(GL43C.GL_SHADER_STORAGE_BUFFER, 2, control_buffer, singleControlBufferSizeAligned * pass_number, singleControlBufferSizeUnaligned);
-						GL43C.glDispatchCompute(numBlocks, 1, 1);
+						GL43C.glDispatchCompute(radixNumBlocks, 1, 1);
 						GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 						int temp = inputKeyValuesBuffer;
@@ -788,24 +791,30 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, resultKeyValues);
 
 			boolean sorted = true;
-			int[] keyCounts = new int[N];
-			for (int i = 0; i < N-1; i++) {
-				int key = resultKeyValues[i * 2 + 0];
-				int value = resultKeyValues[i * 2 + 1];
-				int nextValue = resultKeyValues[(i+1) * 2 + 1];
-				keyCounts[key]++;
-				if (keyCounts[key] > 1) {
-					System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!REPEATED KEYS!!!!!\n");
-					sorted = false;
-					break;
-				}
-				if (value > nextValue) {
-					System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!UNSORTED!!!\n");
-					sorted = false;
-					break;
+			try {
+				int[] keyCounts = new int[N];
+				for (int i = 0; i < N - 1; i++) {
+					int key = resultKeyValues[i * 2 + 0];
+					int value = resultKeyValues[i * 2 + 1];
+					int nextValue = resultKeyValues[(i + 1) * 2 + 1];
+					keyCounts[key]++;
+					if (keyCounts[key] > 1) {
+						System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!REPEATED KEYS!!!!!\n");
+						sorted = false;
+						break;
+					}
+					if (value > nextValue) {
+						System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!UNSORTED!!!\n");
+						System.out.println(value + ">" + nextValue + "   ["+i+"]>["+(i+1)+"]");
+						sorted = false;
+						break;
+					}
 				}
 			}
-
+			catch (Exception e) {
+				e.printStackTrace();
+				sorted = false;
+			}
 
 			if (!sorted) {
 				System.out.println("keys:");
@@ -814,10 +823,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					System.out.println(key);
 				}
 
-				/*System.out.println("DATA:");
+				System.out.println("DATA:");
 				for (int i = 0; i < N; i++) {
-					System.out.println(values[resultKeyValues[i]]);
-				}*/
+					int value = resultKeyValues[i * 2 + 1];
+					System.out.println(value);
+				}
 			}
 
 

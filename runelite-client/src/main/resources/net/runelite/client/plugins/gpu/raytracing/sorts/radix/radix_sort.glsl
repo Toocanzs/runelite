@@ -3,6 +3,10 @@
 
 #define BITS_PER_PASS 4
 #define NUM_BUCKETS (1 << BITS_PER_PASS)
+#define NUM_PASSES (32/BITS_PER_PASS)
+
+#define ITEMS_PER_THREAD 32
+// NOTE: ITEMS_PER_THREAD must be a power of 2
 
 uniform uint num_items;
 uniform uint pass_number;
@@ -26,10 +30,10 @@ layout(std430, binding = 2) restrict buffer _control {
 };
 
 layout(std430, binding = 3) restrict readonly buffer _digit_start_indices {
-    uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];
+    uint digit_start_indices[NUM_PASSES][NUM_BUCKETS];
 };
 
-#define NUM_BITFIELD_INTS (THREAD_COUNT/32)
+#define NUM_BITFIELD_INTS ((THREAD_COUNT*ITEMS_PER_THREAD)/32)
 
 shared uint group_block_id; // TODO: If we hit the shared storage limit, this can be stored in digit offsets temporarily (must barrier zeroing)
 shared uint digit_offset_bitfields[NUM_BUCKETS][NUM_BITFIELD_INTS];
@@ -95,12 +99,12 @@ void main() {
         group_block_id = atomicAdd(block_counter, 1);
     }
 
-    uint block_size = gl_WorkGroupSize.x;
-    uint block_local_index = gl_LocalInvocationID.x;
+    uint block_size = gl_WorkGroupSize.x*ITEMS_PER_THREAD;
+    uint block_local_index = gl_LocalInvocationID.x*ITEMS_PER_THREAD;
 
     // Zero shared memory
-    if (block_local_index < NUM_BUCKETS) {
-        uint bucket_index = block_local_index;
+    if (gl_LocalInvocationID.x < NUM_BUCKETS) {
+        uint bucket_index = gl_LocalInvocationID.x;
         for (uint bitfield_index = 0; bitfield_index < NUM_BITFIELD_INTS; bitfield_index++) {
             digit_offset_bitfields[bucket_index][bitfield_index] = 0;
         }
@@ -115,8 +119,11 @@ void main() {
     uint block_start_index = block_id * block_size;
     uint input_array_index = block_start_index + block_local_index;
 
-    if (input_array_index < num_items) {
-        KeyValue input_key_value = source_key_values[input_array_index];
+    for (int i = 0; i < ITEMS_PER_THREAD && ((input_array_index + i) < num_items); i++) {
+        uint local_index = block_local_index + i;
+        uint array_index = input_array_index + i;
+
+        KeyValue input_key_value = source_key_values[array_index];
         uint digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         // Construct a bitfield for every digit which has either a 1 if that element contains that digit or a zero if not.
         // In other words for digit 3 and an input array of 
@@ -124,15 +131,20 @@ void main() {
         // We generate a bitfield
         // [1,0,0,0,0,0,0,1,1,0]
         // But this is packed into uints instead of a whole 32 bit 1 or 0 for each element
-        atomicOr(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)], get_bitfield_bit(block_local_index));
+        // TODO: If we do ITEMS_PER_THREAD = 32, each get_bitfield_index(local_index) is independent of other threads, so this can be a |= 
+        #if ITEMS_PER_THREAD == 32
+        digit_offset_bitfields[digit][get_bitfield_index(local_index)] |= get_bitfield_bit(local_index);
+        #else
+        atomicOr(digit_offset_bitfields[digit][get_bitfield_index(local_index)], get_bitfield_bit(local_index));
+        #endif
     }
 
     // Wait for atomics
     groupMemoryBarrier();
     barrier();
 
-    if (block_local_index < NUM_BUCKETS) {
-        uint bucket_index = block_local_index;
+    if (gl_LocalInvocationID.x < NUM_BUCKETS) {
+        uint bucket_index = gl_LocalInvocationID.x;
 
         // Get the number of times this digit occurs in the whole group
         uint digit_sum = 0;
@@ -160,21 +172,24 @@ void main() {
     groupMemoryBarrier();
     barrier();
 
-    if (input_array_index < num_items) {
-        KeyValue input_key_value = source_key_values[input_array_index];
+    for (int i = 0; i < ITEMS_PER_THREAD && ((input_array_index + i) < num_items); i++) {
+        uint local_index = block_local_index + i;
+        uint array_index = input_array_index + i;
+
+        KeyValue input_key_value = source_key_values[array_index];
         uint digit = (input_key_value.value >> (pass_number * BITS_PER_PASS)) & (NUM_BUCKETS - 1);
         
         // Sum up the number of occurrences of this digit counting the bits in the bitfield to the left of the current position
         // First count up bits in each int group before this one (each int holds 32 bits which we can count up all 32 in a single bitCount call)
-        uint int_to_stop_at = get_bitfield_index(block_local_index);
+        uint int_to_stop_at = get_bitfield_index(local_index);
         uint sum_of_previous_bitfields = 0;
         for (uint bitfield_index = 0; bitfield_index < int_to_stop_at; bitfield_index++) {
             sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][bitfield_index]);
         }
         // Only count digits to the left of this one by masking out bits to the left
-        uint bit = get_bitfield_bit(block_local_index);
+        uint bit = get_bitfield_bit(local_index);
         uint mask = bit == 0 ? 0 : bit - 1;
-        sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][get_bitfield_index(block_local_index)] & mask);
+        sum_of_previous_bitfields += bitCount(digit_offset_bitfields[digit][get_bitfield_index(local_index)] & mask);
         // Now we have the full count
         uint block_relative_digit_offset = sum_of_previous_bitfields;
 
