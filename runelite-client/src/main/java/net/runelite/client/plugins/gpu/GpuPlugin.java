@@ -1047,6 +1047,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		destroyGlBuffer(radixControlBuffer);
 		destroyGlBuffer(radixDigitStartIndicesBuffer);
 		destroyGlBuffer(tmpOutUvBuffer);
+		GL43C.glDeleteQueries(radixTimingQueries);
 	}
 
 	private void destroyGlBuffer(GLBuffer glBuffer)
@@ -1250,23 +1251,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.GL_STREAM_DRAW,
 			CL12.CL_MEM_WRITE_ONLY);
 
+		// TODO: Check if compute mode is opengl
 		int numTris = targetBufferOffset;
-
-		updateBuffer(mortonKeyValueBuffer,
-				GL43C.GL_ARRAY_BUFFER,
-				numTris*2*4,
-				GL43C.GL_DYNAMIC_DRAW,
-				CL12.CL_MEM_READ_WRITE);
-		// Temp morton buffer is for double buffering during the sort
-		updateBuffer(tmpMortonKeyValueBuffer,
-				GL43C.GL_ARRAY_BUFFER,
-				numTris*2*4,
-				GL43C.GL_DYNAMIC_DRAW,
-				CL12.CL_MEM_READ_WRITE);
-
-		// TODO: fill out the key value buffer with a compute shader
-		// TODO: get min/max while doing that also (atomic min/max into local, atomic min/max to global)
-
 		final int radixWorkGroupSize = 512;
 		// NOTE: For whatever reason, 4 bits per pass is faster than 8.
 		// I've read multiple accounts of 8 bits per pass being faster for other people so unsure what the issue is here, although it's plenty fast already
@@ -1285,6 +1271,39 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		// We allocate numPasses of these control buffers at once, and instead of clearing the data every pass we just move the pointer over to the extra previously cleared data
 		final int controlBufferRequiredSize = alignedControlBufferSize * numPasses;
 
+		updateBuffer(mortonKeyValueBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				numTris*2*4,
+				GL43C.GL_DYNAMIC_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+		// Temp morton buffer is for double buffering during the sort
+		updateBuffer(tmpMortonKeyValueBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				numTris*2*4,
+				GL43C.GL_DYNAMIC_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+
+		// TODO: fill out the key value buffer with a compute shader
+		// TODO: get min/max while doing that also (atomic min/max into local, atomic min/max to global)
+		{ // TODO: REMOVE THIS
+			final int[] keyValues = new int[numTris*2];
+			Random random = new Random();
+			random.setSeed(48);
+			for (int i = 0; i < numTris*2; i+=2) {
+				int r;
+				do {
+					r = random.nextInt();
+				} while(r < 0);
+
+				keyValues[i + 0] = i/2;
+				keyValues[i + 1] = r;
+			}
+
+			// Temporarily just put random values until we do the morton thing
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, mortonKeyValueBuffer.glBufferId);
+			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, keyValues, GL43C.GL_DYNAMIC_DRAW);
+		}
+
 		updateBuffer(radixControlBuffer,
 				GL43C.GL_ARRAY_BUFFER,
 				controlBufferRequiredSize,
@@ -1298,12 +1317,147 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				CL12.CL_MEM_READ_WRITE);
 
 		// Clear the control buffers to zero
-		GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, radixControlBuffer.glBufferId, GL43C.GL_DYNAMIC_DRAW);
+		GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, radixControlBuffer.glBufferId);
 		GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
 
 		// Clear start indices to zero
 		GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, radixDigitStartIndicesBuffer.glBufferId);
 		GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
+
+		// TODO: MOVE TO STARTUP
+		final int uRadixDigitCountNumItems= GL43C.glGetUniformLocation(glRadixCountDigitsProgram, "num_items");
+
+		final int uRadixNumItems = GL43C.glGetUniformLocation(glRadixSortProgram, "num_items");
+		final int uRadixPassNumber = GL43C.glGetUniformLocation(glRadixSortProgram, "pass_number");
+
+		{
+			final int N = numTris;
+			GL43C.glQueryCounter(radixTimingQueries[0], GL43C.GL_TIMESTAMP);
+
+			{ // Count the digits in the dataset, one set of counts per pass
+				GL43C.glUseProgram(glRadixCountDigitsProgram);
+				GL43C.glUniform1ui(uRadixDigitCountNumItems, N);
+				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, mortonKeyValueBuffer.glBufferId);
+				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, radixDigitStartIndicesBuffer.glBufferId);
+
+				GL43C.glDispatchCompute(numBlocks, 1, 1);
+				GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+				GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
+			}
+
+			{ // Compute start indices for each digit, for each pass, by calculating the prefix sum of digit counts
+				GL43C.glQueryCounter(radixTimingQueries[1], GL43C.GL_TIMESTAMP);
+
+				GL43C.glUseProgram(glRadixComputeStartIndices);
+				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, radixDigitStartIndicesBuffer.glBufferId);
+				GL43C.glDispatchCompute(1, numPasses, 1);
+				GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+				GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
+			}
+
+			GL43C.glQueryCounter(radixTimingQueries[2], GL43C.GL_TIMESTAMP);
+
+			GL43C.glUseProgram(glRadixSortProgram);
+			GL43C.glUniform1ui(uRadixNumItems, N);
+
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, mortonKeyValueBuffer.glBufferId);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, radixDigitStartIndicesBuffer.glBufferId);
+
+			for (int pass_number = 0; pass_number < numPasses; pass_number++) { // TODO: Inconsistent naming
+				GLBuffer sourceBuffer = (pass_number & 1) == 0 ? mortonKeyValueBuffer : tmpMortonKeyValueBuffer;
+				GLBuffer destinationBuffer = (pass_number & 1) == 0 ? tmpMortonKeyValueBuffer : mortonKeyValueBuffer;
+
+				GL43C.glUniform1ui(uRadixPassNumber, pass_number);
+				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, sourceBuffer.glBufferId);
+				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, destinationBuffer.glBufferId);
+				// Shift over the control buffer to the one corresponding to this pass
+				GL43C.glBindBufferRange(GL43C.GL_SHADER_STORAGE_BUFFER, 2, radixControlBuffer.glBufferId, alignedControlBufferSize * pass_number, singleControlBufferSizeUnaligned);
+				GL43C.glDispatchCompute(numBlocks, 1, 1);
+				GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+			}
+			assert (numPasses & 1) == 0 : "numPasses is " + numPasses + " which is not even, and the above code expects it to be even (mortonKeyValueBuffer would hold the second to last step in the sort otherwise)";
+
+			GL43C.glQueryCounter(radixTimingQueries[3], GL43C.GL_TIMESTAMP);
+		}
+		boolean profile = false;
+		boolean checkSorted = true;
+		if (profile) {
+			long[] result = new long[1];
+			GL43C.glGetQueryObjectui64v(radixTimingQueries[0], GL43C.GL_QUERY_RESULT, result);
+			long oneNs = result[0];
+
+			GL43C.glGetQueryObjectui64v(radixTimingQueries[1], GL43C.GL_QUERY_RESULT, result);
+			long twoNs = result[0];
+
+			GL43C.glGetQueryObjectui64v(radixTimingQueries[2], GL43C.GL_QUERY_RESULT, result);
+			long threeNs = result[0];
+
+			GL43C.glGetQueryObjectui64v(radixTimingQueries[3], GL43C.GL_QUERY_RESULT, result);
+			long fourNs = result[0];
+
+			double oneTwoMs = (twoNs - oneNs) / 1e6;
+			double twoThreeMs = (threeNs - twoNs) / 1e6;
+			double threeFourMs = (fourNs - threeNs) / 1e6;
+
+			double oneFourMs = (fourNs - oneNs) / 1e6;
+
+			System.out.println("Sorted " + numTris + " in " + oneFourMs + "ms");
+			System.out.println("\tCount: " + oneTwoMs + "ms");
+			System.out.println("\tPrefix: " + twoThreeMs + "ms");
+			System.out.println("\tRadix: " + threeFourMs + "ms");
+			double seconds = oneFourMs * 0.001;
+			double itemsPerSecond = numTris / seconds;
+			double gigaItemsPerSecond = itemsPerSecond * 1e-9;
+			double gigaBytesPerSecond = gigaItemsPerSecond * 4;
+			System.out.println(gigaItemsPerSecond + " giga items per second (" + gigaBytesPerSecond + " gigabytes per second)");
+		}
+
+		if (checkSorted) {
+			int[] resultKeyValues = new int[numTris * 2];
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, mortonKeyValueBuffer.glBufferId);
+			GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, resultKeyValues);
+
+			boolean sorted = true;
+			try {
+				int[] keyCounts = new int[numTris];
+				for (int i = 0; i < numTris - 1; i++) {
+					int key = resultKeyValues[i * 2 + 0];
+					int value = resultKeyValues[i * 2 + 1];
+					int nextValue = resultKeyValues[(i + 1) * 2 + 1];
+					keyCounts[key]++;
+					if (keyCounts[key] > 1) {
+						System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!REPEATED KEYS!!!!! (" + key + ")\n");
+						sorted = false;
+						break;
+					}
+					if (value > nextValue) {
+						System.out.println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!UNSORTED!!!\n");
+						sorted = false;
+						break;
+					}
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+				sorted = false;
+			}
+
+
+			if (!sorted) {
+				System.out.println("keys:");
+				for (int i = 0; i < numTris; i++) {
+					int key = resultKeyValues[i * 2 + 0];
+					System.out.println(key);
+				}
+
+				/*System.out.println("DATA:");
+				for (int i = 0; i < N; i++) {
+					System.out.println(values[resultKeyValues[i]]);
+				}*/
+				shutDown();
+			}
+		}
 
 		if (computeMode == ComputeMode.OPENCL)
 		{
