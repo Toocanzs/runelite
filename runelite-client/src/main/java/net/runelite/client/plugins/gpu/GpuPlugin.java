@@ -209,7 +209,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private final GLBuffer tmpModelBufferSmall = new GLBuffer("model buffer small");
 	private final GLBuffer tmpModelBufferUnordered = new GLBuffer("model buffer unordered");
 	private final GLBuffer tmpOutBuffer = new GLBuffer("out vertex buffer");
+	private final GLBuffer mortonKeyValueBuffer = new GLBuffer("morton key value buffer");
+	private final GLBuffer tmpMortonKeyValueBuffer = new GLBuffer("temp morton key value buffer");
+	private final GLBuffer radixControlBuffer = new GLBuffer("radix control buffer");
+	private final GLBuffer radixDigitStartIndicesBuffer = new GLBuffer("radix digit start indices buffer");
 	private final GLBuffer tmpOutUvBuffer = new GLBuffer("out tex buffer");
+
+	private final int[] radixTimingQueries = new int[4];
 
 	private int textureArrayId;
 	private int tileHeightTex;
@@ -606,14 +612,39 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		return template;
 	}
 
-	private static int nextPowerOf2(final int a)
+	private Template createRadixTemplate(int bitsPerPass, int workGroupSizeX)
 	{
-		int b = 1;
-		while (b < a)
+		final int numBuckets = (1 << bitsPerPass);
+		final int numPasses = 32/bitsPerPass;
+		String versionHeader = OSType.getOSType() == OSType.Linux ? LINUX_VERSION_HEADER : WINDOWS_VERSION_HEADER;
+
+		Template template = new Template();
+		template.add(key ->
 		{
-			b = b << 1;
-		}
-		return b;
+			if ("version_header".equals(key))
+			{
+				return versionHeader;
+			}
+			if ("bits_per_pass".equals(key))
+			{
+				return "#define BITS_PER_PASS " + bitsPerPass + "\n";
+			}
+			if ("thread_count".equals(key))
+			{
+				return "#define THREAD_COUNT " + workGroupSizeX + "\n";
+			}
+			if ("num_buckets".equals(key))
+			{
+				return "#define NUM_BUCKETS " + numBuckets + "\n";
+			}
+			if ("num_passes".equals(key))
+			{
+				return "#define NUM_PASSES " + numPasses + "\n";
+			}
+			return null;
+		});
+		template.addInclude(GpuPlugin.class);
+		return template;
 	}
 
 	private void initProgram() throws ShaderException
@@ -656,9 +687,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				final int numBuckets = 1 << bitsPerPass;
 				final int numBlocks = (N + radixWorkGroupSize - 1) / radixWorkGroupSize;
 
-				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
-				glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createTemplate(radixWorkGroupSize, -1));
-				glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createTemplate(numBuckets, -1)); // Thread config is not used here
+				glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createRadixTemplate(bitsPerPass, radixWorkGroupSize));
+				glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createRadixTemplate(bitsPerPass, radixWorkGroupSize));
+				glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createRadixTemplate(bitsPerPass, numBuckets)); // Thread config is not used here
 
 
 				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, inputKeyValuesBuffer);
@@ -676,6 +707,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				final int singleControlBufferSizeUnaligned = (4*1 + 4*numBlocks*numBuckets);
 				// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
 				final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
+				assert isPowerOfTwo(offsetAlignment) : "glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT) returned a non-power-of-two (" + offsetAlignment + "), and this code expects a power of two";
+
 				// So we round up to the nearest multiple of that
 				final int singleControlBufferSizeAligned = ((singleControlBufferSizeUnaligned + offsetAlignment-1)/offsetAlignment)*offsetAlignment;
 
@@ -984,7 +1017,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		initGlBuffer(tmpModelBufferSmall);
 		initGlBuffer(tmpModelBufferUnordered);
 		initGlBuffer(tmpOutBuffer);
+		initGlBuffer(mortonKeyValueBuffer);
+		initGlBuffer(tmpMortonKeyValueBuffer);
+		initGlBuffer(radixControlBuffer);
+		initGlBuffer(radixDigitStartIndicesBuffer);
 		initGlBuffer(tmpOutUvBuffer);
+
+		GL43C.glGenQueries(radixTimingQueries); // TODO: Remove
 	}
 
 	private void initGlBuffer(GLBuffer glBuffer)
@@ -1003,6 +1042,10 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		destroyGlBuffer(tmpModelBufferSmall);
 		destroyGlBuffer(tmpModelBufferUnordered);
 		destroyGlBuffer(tmpOutBuffer);
+		destroyGlBuffer(mortonKeyValueBuffer);
+		destroyGlBuffer(tmpMortonKeyValueBuffer);
+		destroyGlBuffer(radixControlBuffer);
+		destroyGlBuffer(radixDigitStartIndicesBuffer);
 		destroyGlBuffer(tmpOutUvBuffer);
 	}
 
@@ -1206,6 +1249,61 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			targetBufferOffset * 16, // each element is a vec4, which is 16 bytes
 			GL43C.GL_STREAM_DRAW,
 			CL12.CL_MEM_WRITE_ONLY);
+
+		int numTris = targetBufferOffset;
+
+		updateBuffer(mortonKeyValueBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				numTris*2*4,
+				GL43C.GL_DYNAMIC_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+		// Temp morton buffer is for double buffering during the sort
+		updateBuffer(tmpMortonKeyValueBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				numTris*2*4,
+				GL43C.GL_DYNAMIC_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+
+		// TODO: fill out the key value buffer with a compute shader
+		// TODO: get min/max while doing that also (atomic min/max into local, atomic min/max to global)
+
+		final int radixWorkGroupSize = 512;
+		// NOTE: For whatever reason, 4 bits per pass is faster than 8.
+		// I've read multiple accounts of 8 bits per pass being faster for other people so unsure what the issue is here, although it's plenty fast already
+		final int bitsPerPass = 4;
+		final int numPasses = 32/bitsPerPass;
+		final int numBuckets = 1 << bitsPerPass;
+		final int numBlocks = (numTris + radixWorkGroupSize - 1) / radixWorkGroupSize;
+
+		final int singleControlBufferSizeUnaligned = (4*1 + 4*numBlocks*numBuckets); // 1 uint(4 bytes) for group id counter, numBlocks*numBuckets uints for the statuses (4 bytes each)
+		// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
+		final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
+		assert isPowerOfTwo(offsetAlignment) : "glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT) returned a non-power-of-two (" + offsetAlignment + "), and this code expects a power of two";
+
+		final int alignedControlBufferSize = ((singleControlBufferSizeUnaligned + offsetAlignment-1)/offsetAlignment)*offsetAlignment; // NOTE: Assumes offsetAlignment is a power of two
+
+		// We allocate numPasses of these control buffers at once, and instead of clearing the data every pass we just move the pointer over to the extra previously cleared data
+		final int controlBufferRequiredSize = alignedControlBufferSize * numPasses;
+
+		updateBuffer(radixControlBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				controlBufferRequiredSize,
+				GL43C.GL_DYNAMIC_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+
+		updateBuffer(radixDigitStartIndicesBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				4*numPasses*numBuckets,
+				GL43C.GL_DYNAMIC_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+
+		// Clear the control buffers to zero
+		GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, radixControlBuffer.glBufferId, GL43C.GL_DYNAMIC_DRAW);
+		GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
+
+		// Clear start indices to zero
+		GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, radixDigitStartIndicesBuffer.glBufferId);
+		GL43C.glClearBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, GL43C.GL_R32UI, GL43C.GL_RED, GL43C.GL_UNSIGNED_INT, (int[])null);
 
 		if (computeMode == ComputeMode.OPENCL)
 		{
@@ -2200,6 +2298,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		v |= v >> 16;
 		v++;
 		return v;
+	}
+
+	private static boolean isPowerOfTwo(int n) {
+		if (n <= 0) return false;
+		return (n & -n) == n;
 	}
 
 	private void recreateCLBuffer(GLBuffer glBuffer, long clFlags)

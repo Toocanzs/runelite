@@ -1,8 +1,8 @@
 #include version_header
-#include thread_config
-
-#define BITS_PER_PASS 4
-#define NUM_BUCKETS (1 << BITS_PER_PASS)
+#include thread_count
+#include bits_per_pass
+#include num_buckets
+#include num_passes
 
 layout(std430, binding = 0) restrict buffer _output {
     uint digit_start_indices[32/BITS_PER_PASS][NUM_BUCKETS];

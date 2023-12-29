@@ -1,8 +1,8 @@
 #include version_header
-#include thread_config
-
-#define BITS_PER_PASS 4
-#define NUM_BUCKETS (1 << BITS_PER_PASS)
+#include thread_count
+#include bits_per_pass
+#include num_buckets
+#include num_passes
 
 uniform uint num_items;
 uniform uint pass_number;
