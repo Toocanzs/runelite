@@ -61,14 +61,6 @@ class SceneUploader
 	private int uvoffset;
 	private int uniqueModels;
 
-	private int minX;
-	private int minY;
-	private int minZ;
-
-	private int maxX;
-	private int maxY;
-	private int maxZ;
-
 	@Inject
 	SceneUploader(
 		Client client,
@@ -96,13 +88,6 @@ class SceneUploader
 		uniqueModels = 0;
 		vertexBuffer.clear();
 		uvBuffer.clear();
-		minX = Integer.MAX_VALUE;
-		minY = Integer.MAX_VALUE;
-		minZ = Integer.MAX_VALUE;
-
-		maxX = Integer.MIN_VALUE;
-		maxY = Integer.MIN_VALUE;
-		maxZ = Integer.MIN_VALUE;
 
 		Stopwatch stopwatch = Stopwatch.createStarted();
 		prepare(scene);
@@ -127,8 +112,6 @@ class SceneUploader
 
 		stopwatch.stop();
 		log.debug("Scene upload time: {} unique models: {} length: {}KB", stopwatch, uniqueModels, (offset * 16) / 1024);
-		System.out.println("minX=" + minX + " minY=" + minY + " minZ=" + minZ + "\nmaxX=" + maxX + " maxY=" + maxY + " maxZ=" + maxZ);
-		System.out.println("extentX="+(maxX-minX) + " extentY=" + (maxY-minY) + " extentZ="+ (maxZ-minZ));
 
 		int N = 256;
 		int[] source = new int[N];
@@ -412,16 +395,6 @@ class SceneUploader
 		}
 	}
 
-	void updateMinMax(int x, int y, int z) {
-		minX = Math.min(minX, x);
-		minY = Math.min(minY, y);
-		minZ = Math.min(minZ, z);
-
-		maxX = Math.max(maxX, x);
-		maxY = Math.max(maxY, y);
-		maxZ = Math.max(maxZ, z);
-	}
-
 	int upload(Scene scene, SceneTilePaint tile, int tileZ, int tileX, int tileY, GpuIntBuffer vertexBuffer, GpuFloatBuffer uvBuffer,
 		int offsetX, int offsetY, boolean padUvs)
 	{
@@ -473,11 +446,6 @@ class SceneUploader
 		int vertexBy = localY + Perspective.LOCAL_TILE_SIZE;
 		int vertexBz = nwHeight;
 		final int c4 = nwColor;
-
-		updateMinMax(vertexAx, vertexAy, vertexAz);
-		updateMinMax(vertexBx, vertexBy, vertexBz);
-		updateMinMax(vertexCx, vertexCy, vertexCz);
-		updateMinMax(vertexDx, vertexDy, vertexDz);
 
 		vertexBuffer.put(vertexAx, vertexAz, vertexAy, c3);
 		vertexBuffer.put(vertexBx, vertexBz, vertexBy, c4);
@@ -557,10 +525,6 @@ class SceneUploader
 			int vertexXC = vertexX[triangleC] - baseX;
 			int vertexYC = vertexY[triangleC];
 			int vertexZC = vertexZ[triangleC] - baseY;
-
-			updateMinMax(vertexXA, vertexYA, vertexZA);
-			updateMinMax(vertexXB, vertexYB, vertexZB);
-			updateMinMax(vertexXC, vertexYC, vertexZC);
 
 			vertexBuffer.put(vertexXA + offsetX, vertexYA, vertexZA + offsetZ, colorA);
 			vertexBuffer.put(vertexXB + offsetX, vertexYB, vertexZB + offsetZ, colorB);
@@ -698,10 +662,6 @@ class SceneUploader
 			int triangleA = indices1[face];
 			int triangleB = indices2[face];
 			int triangleC = indices3[face];
-
-			updateMinMax(vertexX[triangleA], vertexY[triangleA], vertexZ[triangleA]);
-			updateMinMax(vertexX[triangleB], vertexY[triangleB], vertexZ[triangleB]);
-			updateMinMax(vertexX[triangleC], vertexY[triangleC], vertexZ[triangleC]);
 
 			vertexBuffer.put(vertexX[triangleA], vertexY[triangleA], vertexZ[triangleA], packAlphaPriority | color1);
 			vertexBuffer.put(vertexX[triangleB], vertexY[triangleB], vertexZ[triangleB], packAlphaPriority | color2);
@@ -1176,10 +1136,6 @@ class SceneUploader
 				color3 = interpolateHSL(color3, overrideHue, overrideSat, overrideLum, overrideAmount);
 			}
 		}
-
-		updateMinMax(modelLocalX[triangleA], modelLocalY[triangleA], modelLocalZ[triangleA]);
-		updateMinMax(modelLocalX[triangleB], modelLocalY[triangleB], modelLocalZ[triangleB]);
-		updateMinMax(modelLocalX[triangleC], modelLocalY[triangleC], modelLocalZ[triangleC]);
 
 		vertexBuffer.put(modelLocalX[triangleA], modelLocalY[triangleA], modelLocalZ[triangleA], packAlphaPriority | color1);
 		vertexBuffer.put(modelLocalX[triangleB], modelLocalY[triangleB], modelLocalZ[triangleB], packAlphaPriority | color2);
