@@ -177,9 +177,19 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/radix/count_digits.glsl");
 	static final Shader RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM = new Shader()
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/radix/compute_digit_start_indices.glsl");
+	static final Shader MIN_MAX_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/calculate_min_max.glsl");
+	static final Shader MIN_MAX_SETUP_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/init_min_max.glsl");
+	static int glMinMaxBuffer;
 
 	static final int radixWorkGroupSize = 512;
-	static final int radixBitsPerPAss = 4;
+	// NOTE: For whatever reason, 4 bits per pass is faster than 8.
+	// I've read multiple accounts of 8 bits per pass being faster for other people so unsure what the issue is here, although it's plenty fast already
+	static final int radixBitsPerPass = 4;
+	static final int radixNumPasses = 32 / radixBitsPerPass;
+	static final int radixNumBuckets = 1 << radixBitsPerPass;
+
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -189,6 +199,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glBitonicSetupProgram;
 	private int glRadixCountDigitsProgram;
 	private int glRadixComputeStartIndices;
+	private int glMinMaxProgram;
+	private int glMinMaxSetupProgram;
 	private int glRadixSortProgram;
 	private int glUiProgram;
 
@@ -303,6 +315,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniRadixDigitCountNumItems;
 	private int uniRadixNumItems;
 	private int uniRadixPassNumber;
+	private int uniMinMaxNumItems;
 
 	private boolean lwjglInitted = false;
 
@@ -665,10 +678,17 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 
-			final int numBuckets = 1 << radixBitsPerPAss;
-			glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createRadixTemplate(radixBitsPerPAss, radixWorkGroupSize));
-			glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createRadixTemplate(radixBitsPerPAss, radixWorkGroupSize));
-			glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createRadixTemplate(radixBitsPerPAss, numBuckets)); // Thread config is not used here
+			glRadixSortProgram = RADIX_TEST_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixWorkGroupSize));
+			glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixWorkGroupSize));
+			glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixNumBuckets)); // Thread config is not used here
+
+			glMinMaxProgram = MIN_MAX_PROGRAM.compile(createTemplate(radixWorkGroupSize,-1));
+			glMinMaxBuffer = GL43C.glGenBuffers();
+			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, glMinMaxBuffer);
+			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 6*4, GL43C.GL_DYNAMIC_DRAW); // NOTE: 6 ints for min x/y/z and max x/y/z, size = 4 bytes each
+
+			glMinMaxSetupProgram = MIN_MAX_SETUP_PROGRAM.compile(createTemplate(-1,-1));
+
 			checkGLErrors();
 		}
 		else if (computeMode == ComputeMode.OPENCL)
@@ -715,6 +735,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		uniRadixNumItems = GL43C.glGetUniformLocation(glRadixSortProgram, "num_items");
 		uniRadixPassNumber = GL43C.glGetUniformLocation(glRadixSortProgram, "pass_number");
 
+		uniMinMaxNumItems = GL43C.glGetUniformLocation(glMinMaxProgram, "num_items");
+
 		if (computeMode == ComputeMode.OPENGL)
 		{
 			uniBlockSmall = GL43C.glGetUniformBlockIndex(glSmallComputeProgram, "uniforms");
@@ -747,6 +769,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glRadixComputeStartIndices);
 		glRadixComputeStartIndices = -1;
+
+		GL43C.glDeleteProgram(glMinMaxProgram);
+		glMinMaxProgram = -1;
+		GL43C.glDeleteBuffers(glMinMaxBuffer);
+
+		GL43C.glDeleteProgram(glMinMaxSetupProgram);
+		glMinMaxSetupProgram = -1;
 
 		GL43C.glDeleteProgram(glBitonicSetupProgram);
 		glBitonicSetupProgram = -1;
@@ -1070,16 +1099,104 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.GL_STREAM_DRAW,
 			CL12.CL_MEM_WRITE_ONLY);
 
-		if (computeMode == ComputeMode.OPENGL) {
-			int numTris = targetBufferOffset;
-			// NOTE: For whatever reason, 4 bits per pass is faster than 8.
-			// I've read multiple accounts of 8 bits per pass being faster for other people so unsure what the issue is here, although it's plenty fast already
-			final int bitsPerPass = 4;
-			final int numPasses = 32 / bitsPerPass;
-			final int numBuckets = 1 << bitsPerPass;
-			final int numBlocks = (numTris + radixWorkGroupSize - 1) / radixWorkGroupSize;
+		if (computeMode == ComputeMode.OPENCL)
+		{
+			// The docs for clEnqueueAcquireGLObjects say all pending GL operations must be completed before calling
+			// clEnqueueAcquireGLObjects, and recommends calling glFinish() as the only portable way to do that.
+			// However no issues have been observed from not calling it, and so will leave disabled for now.
+			// GL43C.glFinish();
 
-			final int singleControlBufferSizeUnaligned = (4 * 1 + 4 * numBlocks * numBuckets); // 1 uint(4 bytes) for group id counter, numBlocks*numBuckets uints for the statuses (4 bytes each)
+			openCLManager.compute(
+				unorderedModels, smallModels, largeModels,
+				sceneVertexBuffer, sceneUvBuffer,
+				tmpVertexBuffer, tmpUvBuffer,
+				tmpModelBufferUnordered, tmpModelBufferSmall, tmpModelBufferLarge,
+				tmpOutBuffer, tmpOutUvBuffer,
+				uniformBuffer);
+
+			checkGLErrors();
+			return;
+		}
+
+		/*
+		 * Compute is split into three separate programs: 'unordered', 'small', and 'large'
+		 * to save on GPU resources. Small will sort <= 512 faces, large will do <= 6144.
+		 */
+
+		// Bind UBO to compute programs
+		GL43C.glUniformBlockBinding(glSmallComputeProgram, uniBlockSmall, 0);
+		GL43C.glUniformBlockBinding(glComputeProgram, uniBlockLarge, 0);
+
+		// unordered
+		GL43C.glUseProgram(glUnorderedComputeProgram);
+
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferUnordered.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+
+		GL43C.glDispatchCompute(unorderedModels, 1, 1);
+
+		// small
+		GL43C.glUseProgram(glSmallComputeProgram);
+
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferSmall.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+
+		GL43C.glDispatchCompute(smallModels, 1, 1);
+
+		// large
+		GL43C.glUseProgram(glComputeProgram);
+
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+
+		GL43C.glDispatchCompute(largeModels, 1, 1);
+
+		buildBVH();
+
+		checkGLErrors();
+	}
+
+	private void buildBVH() {
+		if (computeMode == ComputeMode.OPENGL) {
+			// Clear min/max buffer to max/min value for int so future atomic min/max will calculate the actual min/max
+			GL43C.glUseProgram(glMinMaxSetupProgram);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, glMinMaxBuffer);
+			GL43C.glDispatchCompute(1, 1, 1);
+
+			// Barrier to wait for writes from previous compute shaders and the min max setup
+			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+			final int numVertices = targetBufferOffset;
+			assert numVertices % 3 == 0 : "numVertices is not a multiple of three";
+			final int numTris = numVertices/3;
+			final int numBlocksVertices = (numVertices + radixWorkGroupSize - 1) / radixWorkGroupSize;
+			final int numBlocksTris = (numTris + radixWorkGroupSize - 1) / radixWorkGroupSize;
+
+			// Calculate min/max of coordinates of the vertex buffer
+			// This is used when generating morton codes. We only have 10 bits per axis so we want to maximize the resolution by using space for only what exists in the scene
+			GL43C.glUseProgram(glMinMaxProgram);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpOutBuffer.glBufferId);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, glMinMaxBuffer);
+			GL43C.glUniform1ui(uniMinMaxNumItems, numVertices);
+			GL43C.glDispatchCompute(numBlocksVertices, 1, 1);
+			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+			final int singleControlBufferSizeUnaligned = (4 * 1 + 4 * numBlocksTris * radixNumBuckets); // 1 uint(4 bytes) for group id counter, numBlocks*numBuckets uints for the statuses (4 bytes each)
 			// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
 			final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
 			assert isPowerOfTwo(offsetAlignment) : "glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT) returned a non-power-of-two (" + offsetAlignment + "), and this code expects a power of two";
@@ -1087,7 +1204,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			final int alignedControlBufferSize = ((singleControlBufferSizeUnaligned + offsetAlignment - 1) / offsetAlignment) * offsetAlignment; // NOTE: Assumes offsetAlignment is a power of two
 
 			// We allocate numPasses of these control buffers at once, and instead of clearing the data every pass we just move the pointer over to the extra previously cleared data
-			final int controlBufferRequiredSize = alignedControlBufferSize * numPasses;
+			final int controlBufferRequiredSize = alignedControlBufferSize * radixNumPasses;
 
 			updateBuffer(mortonKeyValueBuffer,
 					GL43C.GL_ARRAY_BUFFER,
@@ -1130,7 +1247,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			updateBuffer(radixDigitStartIndicesBuffer,
 					GL43C.GL_ARRAY_BUFFER,
-					4 * numPasses * numBuckets,
+					4 * radixNumPasses * radixNumBuckets,
 					GL43C.GL_DYNAMIC_DRAW,
 					CL12.CL_MEM_READ_WRITE);
 
@@ -1152,7 +1269,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, mortonKeyValueBuffer.glBufferId);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, radixDigitStartIndicesBuffer.glBufferId);
 
-					GL43C.glDispatchCompute(numBlocks, 1, 1);
+					GL43C.glDispatchCompute(numBlocksTris, 1, 1);
 					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
@@ -1163,7 +1280,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 					GL43C.glUseProgram(glRadixComputeStartIndices);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, radixDigitStartIndicesBuffer.glBufferId);
-					GL43C.glDispatchCompute(1, numPasses, 1);
+					GL43C.glDispatchCompute(1, radixNumPasses, 1);
 					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
@@ -1177,7 +1294,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, mortonKeyValueBuffer.glBufferId);
 				GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, radixDigitStartIndicesBuffer.glBufferId);
 
-				for (int pass_number = 0; pass_number < numPasses; pass_number++) { // TODO: Inconsistent naming
+				for (int pass_number = 0; pass_number < radixNumPasses; pass_number++) { // TODO: Inconsistent naming
 					GLBuffer sourceBuffer = (pass_number & 1) == 0 ? mortonKeyValueBuffer : tmpMortonKeyValueBuffer;
 					GLBuffer destinationBuffer = (pass_number & 1) == 0 ? tmpMortonKeyValueBuffer : mortonKeyValueBuffer;
 
@@ -1186,10 +1303,10 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, destinationBuffer.glBufferId);
 					// Shift over the control buffer to the one corresponding to this pass
 					GL43C.glBindBufferRange(GL43C.GL_SHADER_STORAGE_BUFFER, 2, radixControlBuffer.glBufferId, alignedControlBufferSize * pass_number, singleControlBufferSizeUnaligned);
-					GL43C.glDispatchCompute(numBlocks, 1, 1);
+					GL43C.glDispatchCompute(numBlocksTris, 1, 1);
 					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 				}
-				assert (numPasses & 1) == 0 : "numPasses is " + numPasses + " which is not even, and the above code expects it to be even (mortonKeyValueBuffer would hold the second to last step in the sort otherwise)";
+				assert (radixNumPasses & 1) == 0 : "numPasses is " + radixNumPasses + " which is not even, and the above code expects it to be even (mortonKeyValueBuffer would hold the second to last step in the sort otherwise)";
 
 				GL43C.glQueryCounter(radixTimingQueries[3], GL43C.GL_TIMESTAMP);
 			}
@@ -1271,75 +1388,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				}
 			}
 		}
-
-		if (computeMode == ComputeMode.OPENCL)
-		{
-			// The docs for clEnqueueAcquireGLObjects say all pending GL operations must be completed before calling
-			// clEnqueueAcquireGLObjects, and recommends calling glFinish() as the only portable way to do that.
-			// However no issues have been observed from not calling it, and so will leave disabled for now.
-			// GL43C.glFinish();
-
-			openCLManager.compute(
-				unorderedModels, smallModels, largeModels,
-				sceneVertexBuffer, sceneUvBuffer,
-				tmpVertexBuffer, tmpUvBuffer,
-				tmpModelBufferUnordered, tmpModelBufferSmall, tmpModelBufferLarge,
-				tmpOutBuffer, tmpOutUvBuffer,
-				uniformBuffer);
-
-			checkGLErrors();
-			return;
-		}
-
-		/*
-		 * Compute is split into three separate programs: 'unordered', 'small', and 'large'
-		 * to save on GPU resources. Small will sort <= 512 faces, large will do <= 6144.
-		 */
-
-		// Bind UBO to compute programs
-		GL43C.glUniformBlockBinding(glSmallComputeProgram, uniBlockSmall, 0);
-		GL43C.glUniformBlockBinding(glComputeProgram, uniBlockLarge, 0);
-
-		// unordered
-		GL43C.glUseProgram(glUnorderedComputeProgram);
-
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferUnordered.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
-
-		GL43C.glDispatchCompute(unorderedModels, 1, 1);
-
-		// small
-		GL43C.glUseProgram(glSmallComputeProgram);
-
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferSmall.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
-
-		GL43C.glDispatchCompute(smallModels, 1, 1);
-
-		// large
-		GL43C.glUseProgram(glComputeProgram);
-
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
-
-		GL43C.glDispatchCompute(largeModels, 1, 1);
-
-		checkGLErrors();
 	}
 
 	@Override
