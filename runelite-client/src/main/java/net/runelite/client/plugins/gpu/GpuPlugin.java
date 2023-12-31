@@ -181,6 +181,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/calculate_min_max.glsl");
 	static final Shader MIN_MAX_SETUP_PROGRAM = new Shader()
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/init_min_max.glsl");
+	static final Shader MORTON_CODE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/morton_codes.glsl");
 	static int glMinMaxBuffer;
 
 	static final int radixWorkGroupSize = 512;
@@ -201,6 +203,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glRadixComputeStartIndices;
 	private int glMinMaxProgram;
 	private int glMinMaxSetupProgram;
+	private int glMortonCodeProgram;
 	private int glRadixSortProgram;
 	private int glUiProgram;
 
@@ -316,6 +319,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniRadixNumItems;
 	private int uniRadixPassNumber;
 	private int uniMinMaxNumItems;
+	private int uniMortonCodeNumItems;
 
 	private boolean lwjglInitted = false;
 
@@ -688,6 +692,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 6*4, GL43C.GL_DYNAMIC_DRAW); // NOTE: 6 ints for min x/y/z and max x/y/z, size = 4 bytes each
 
 			glMinMaxSetupProgram = MIN_MAX_SETUP_PROGRAM.compile(createTemplate(-1,-1));
+			glMortonCodeProgram = MORTON_CODE_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixWorkGroupSize));
 
 			checkGLErrors();
 		}
@@ -737,6 +742,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		uniMinMaxNumItems = GL43C.glGetUniformLocation(glMinMaxProgram, "num_items");
 
+		uniMortonCodeNumItems = GL43C.glGetUniformLocation(glMortonCodeProgram, "num_items");
+
 		if (computeMode == ComputeMode.OPENGL)
 		{
 			uniBlockSmall = GL43C.glGetUniformBlockIndex(glSmallComputeProgram, "uniforms");
@@ -776,6 +783,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glMinMaxSetupProgram);
 		glMinMaxSetupProgram = -1;
+
+		GL43C.glDeleteProgram(glMortonCodeProgram);
+		glMortonCodeProgram = -1;
 
 		GL43C.glDeleteProgram(glBitonicSetupProgram);
 		glBitonicSetupProgram = -1;
@@ -1218,27 +1228,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.GL_DYNAMIC_DRAW,
 					CL12.CL_MEM_READ_WRITE);
 
-			// TODO: fill out the key value buffer with a compute shader
-			// TODO: get min/max while doing that also (atomic min/max into local, atomic min/max to global)
-			{ // TODO: REMOVE THIS
-				final int[] keyValues = new int[numTris * 2];
-				Random random = new Random();
-				random.setSeed(48);
-				for (int i = 0; i < numTris * 2; i += 2) {
-					int r;
-					do {
-						r = random.nextInt();
-					} while (r < 0);
+			// Setup key/values with morton code and triangle index
+			GL43C.glUseProgram(glMortonCodeProgram);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpOutBuffer.glBufferId);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, glMinMaxBuffer);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, mortonKeyValueBuffer.glBufferId);
+			GL43C.glUniform1ui(uniMortonCodeNumItems, numTris);
+			GL43C.glDispatchCompute(numBlocksTris, 1, 1);
+			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
-					keyValues[i + 0] = i / 2;
-					keyValues[i + 1] = r;
-				}
-
-				// Temporarily just put random values until we do the morton thing
-				GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, mortonKeyValueBuffer.glBufferId);
-				GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, keyValues, GL43C.GL_DYNAMIC_DRAW);
-			}
-
+			// Sort the morton codes using radix sort
 			updateBuffer(radixControlBuffer,
 					GL43C.GL_ARRAY_BUFFER,
 					controlBufferRequiredSize,
@@ -1311,7 +1310,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				GL43C.glQueryCounter(radixTimingQueries[3], GL43C.GL_TIMESTAMP);
 			}
 			boolean profile = false;
-			boolean checkSorted = true;
+			boolean checkSorted = false;
 			if (profile) {
 				long[] result = new long[1];
 				GL43C.glGetQueryObjectui64v(radixTimingQueries[0], GL43C.GL_QUERY_RESULT, result);
@@ -1381,8 +1380,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					}
 
 				/*System.out.println("DATA:");
-				for (int i = 0; i < N; i++) {
-					System.out.println(values[resultKeyValues[i]]);
+				for (int i = 0; i < numTris; i++) {
+					int value = resultKeyValues[i * 2 + 1];
+					System.out.println(value);
 				}*/
 					shutDown();
 				}
