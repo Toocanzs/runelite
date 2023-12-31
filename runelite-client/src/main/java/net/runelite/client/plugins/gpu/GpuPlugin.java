@@ -166,11 +166,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		.add(GL43C.GL_VERTEX_SHADER, "vertui.glsl")
 		.add(GL43C.GL_FRAGMENT_SHADER, "fragui.glsl");
 
-	static final Shader BITONIC_SORT_PROGRAM = new Shader()
-			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/bitonic/bitonic_sort.glsl");
-	static final Shader BITONIC_SETUP_PROGRAM = new Shader()
-			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/bitonic/setup_keys_and_padding.glsl");
-
 	static final Shader RADIX_TEST_PROGRAM = new Shader()
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/sorts/radix/radix_sort.glsl");
 	static final Shader RADIX_COUNT_DIGITS_PROGRAM = new Shader()
@@ -197,8 +192,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glComputeProgram;
 	private int glSmallComputeProgram;
 	private int glUnorderedComputeProgram;
-	private int glBitonicSortProgram;
-	private int glBitonicSetupProgram;
 	private int glRadixCountDigitsProgram;
 	private int glRadixComputeStartIndices;
 	private int glMinMaxProgram;
@@ -765,9 +758,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glDeleteProgram(glUnorderedComputeProgram);
 		glUnorderedComputeProgram = -1;
 
-		GL43C.glDeleteProgram(glBitonicSortProgram);
-		glBitonicSortProgram = -1;
-
 		GL43C.glDeleteProgram(glRadixSortProgram);
 		glRadixSortProgram = -1;
 
@@ -786,9 +776,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glMortonCodeProgram);
 		glMortonCodeProgram = -1;
-
-		GL43C.glDeleteProgram(glBitonicSetupProgram);
-		glBitonicSetupProgram = -1;
 
 		GL43C.glDeleteProgram(glUiProgram);
 		glUiProgram = -1;
