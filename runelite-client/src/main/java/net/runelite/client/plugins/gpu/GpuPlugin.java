@@ -226,8 +226,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private final GLBuffer radixDigitStartIndicesBuffer = new GLBuffer("radix digit start indices buffer");
 	private final GLBuffer tmpOutUvBuffer = new GLBuffer("out tex buffer");
 
-	private final int[] radixTimingQueries = new int[4];
-
 	private int textureArrayId;
 	private int tileHeightTex;
 
@@ -867,8 +865,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		initGlBuffer(radixControlBuffer);
 		initGlBuffer(radixDigitStartIndicesBuffer);
 		initGlBuffer(tmpOutUvBuffer);
-
-		GL43C.glGenQueries(radixTimingQueries); // TODO: Remove
 	}
 
 	private void initGlBuffer(GLBuffer glBuffer)
@@ -892,7 +888,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		destroyGlBuffer(radixControlBuffer);
 		destroyGlBuffer(radixDigitStartIndicesBuffer);
 		destroyGlBuffer(tmpOutUvBuffer);
-		GL43C.glDeleteQueries(radixTimingQueries);
 	}
 
 	private void destroyGlBuffer(GLBuffer glBuffer)
@@ -1247,7 +1242,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			{
 				final int N = numTris;
-				GL43C.glQueryCounter(radixTimingQueries[0], GL43C.GL_TIMESTAMP);
 
 				{ // Count the digits in the dataset, one set of counts per pass
 					GL43C.glUseProgram(glRadixCountDigitsProgram);
@@ -1261,8 +1255,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
 				}
 
-				{ // Compute start indices for each digit, for each pass, by calculating the prefix sum of digit counts
-					GL43C.glQueryCounter(radixTimingQueries[1], GL43C.GL_TIMESTAMP);
+				{ // Compute start indices for each digit, for each pass, by calculating the prefix sum of digit counts;
 
 					GL43C.glUseProgram(glRadixComputeStartIndices);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, radixDigitStartIndicesBuffer.glBufferId);
@@ -1271,8 +1264,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
 				}
-
-				GL43C.glQueryCounter(radixTimingQueries[2], GL43C.GL_TIMESTAMP);
 
 				GL43C.glUseProgram(glRadixSortProgram);
 				GL43C.glUniform1ui(uniRadixNumItems, N);
@@ -1293,41 +1284,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 				}
 				assert (radixNumPasses & 1) == 0 : "numPasses is " + radixNumPasses + " which is not even, and the above code expects it to be even (mortonKeyValueBuffer would hold the second to last step in the sort otherwise)";
-
-				GL43C.glQueryCounter(radixTimingQueries[3], GL43C.GL_TIMESTAMP);
 			}
-			boolean profile = false;
 			boolean checkSorted = false;
-			if (profile) {
-				long[] result = new long[1];
-				GL43C.glGetQueryObjectui64v(radixTimingQueries[0], GL43C.GL_QUERY_RESULT, result);
-				long oneNs = result[0];
-
-				GL43C.glGetQueryObjectui64v(radixTimingQueries[1], GL43C.GL_QUERY_RESULT, result);
-				long twoNs = result[0];
-
-				GL43C.glGetQueryObjectui64v(radixTimingQueries[2], GL43C.GL_QUERY_RESULT, result);
-				long threeNs = result[0];
-
-				GL43C.glGetQueryObjectui64v(radixTimingQueries[3], GL43C.GL_QUERY_RESULT, result);
-				long fourNs = result[0];
-
-				double oneTwoMs = (twoNs - oneNs) / 1e6;
-				double twoThreeMs = (threeNs - twoNs) / 1e6;
-				double threeFourMs = (fourNs - threeNs) / 1e6;
-
-				double oneFourMs = (fourNs - oneNs) / 1e6;
-
-				System.out.println("Sorted " + numTris + " in " + oneFourMs + "ms");
-				System.out.println("\tCount: " + oneTwoMs + "ms");
-				System.out.println("\tPrefix: " + twoThreeMs + "ms");
-				System.out.println("\tRadix: " + threeFourMs + "ms");
-				double seconds = oneFourMs * 0.001;
-				double itemsPerSecond = numTris / seconds;
-				double gigaItemsPerSecond = itemsPerSecond * 1e-9;
-				double gigaBytesPerSecond = gigaItemsPerSecond * 4;
-				System.out.println(gigaItemsPerSecond + " giga items per second (" + gigaBytesPerSecond + " gigabytes per second)");
-			}
 
 			if (checkSorted) {
 				int[] resultKeyValues = new int[numTris * 2];
