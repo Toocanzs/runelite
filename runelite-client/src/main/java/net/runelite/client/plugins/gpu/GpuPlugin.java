@@ -224,6 +224,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private final GLBuffer tmpMortonKeyValueBuffer = new GLBuffer("temp morton key value buffer");
 	private final GLBuffer radixControlBuffer = new GLBuffer("radix control buffer");
 	private final GLBuffer radixDigitStartIndicesBuffer = new GLBuffer("radix digit start indices buffer");
+	private final GLBuffer bvhNodesBuffer = new GLBuffer("BVH nodes buffer");
 	private final GLBuffer tmpOutUvBuffer = new GLBuffer("out tex buffer");
 
 	private int textureArrayId;
@@ -864,6 +865,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		initGlBuffer(tmpMortonKeyValueBuffer);
 		initGlBuffer(radixControlBuffer);
 		initGlBuffer(radixDigitStartIndicesBuffer);
+		initGlBuffer(bvhNodesBuffer);
 		initGlBuffer(tmpOutUvBuffer);
 	}
 
@@ -887,6 +889,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		destroyGlBuffer(tmpMortonKeyValueBuffer);
 		destroyGlBuffer(radixControlBuffer);
 		destroyGlBuffer(radixDigitStartIndicesBuffer);
+		destroyGlBuffer(bvhNodesBuffer);
 		destroyGlBuffer(tmpOutUvBuffer);
 	}
 
@@ -1165,6 +1168,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 	private void buildBVH() {
 		if (computeMode == ComputeMode.OPENGL) {
+			// TODO: All of the updateBuffer calls can probably be moved up here, although I don't know that it matters
 			// Clear min/max buffer to max/min value for int so future atomic min/max will calculate the actual min/max
 			GL43C.glUseProgram(glMinMaxSetupProgram);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, glMinMaxBuffer);
@@ -1185,7 +1189,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpOutBuffer.glBufferId);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, glMinMaxBuffer);
 			GL43C.glUniform1ui(uniMinMaxNumItems, numVertices);
-			GL43C.glDispatchCompute(numBlocksVertices, 1, 1);
+			GL43C.glDispatchCompute(numBlocksVertices, 1, 1); // TODO: numBlocksVertices should be a separate thing from radixBlockSize. This has nothing to do with radix sort
 			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 			final int singleControlBufferSizeUnaligned = (4 * 1 + 4 * numBlocksTris * radixNumBuckets); // 1 uint(4 bytes) for group id counter, numBlocks*numBuckets uints for the statuses (4 bytes each)
@@ -1216,7 +1220,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, glMinMaxBuffer);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, mortonKeyValueBuffer.glBufferId);
 			GL43C.glUniform1ui(uniMortonCodeNumItems, numTris);
-			GL43C.glDispatchCompute(numBlocksTris, 1, 1);
+			GL43C.glDispatchCompute(numBlocksTris, 1, 1); // TODO: numBlocksTris should be a separate thing from radixBlockSize. This has nothing to do with radix sort
 			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 			// Sort the morton codes using radix sort
@@ -1324,14 +1328,51 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 						System.out.println(key);
 					}
 
-				/*System.out.println("DATA:");
-				for (int i = 0; i < numTris; i++) {
-					int value = resultKeyValues[i * 2 + 1];
-					System.out.println(value);
-				}*/
+					/*System.out.println("DATA:");
+					for (int i = 0; i < numTris; i++) {
+						int value = resultKeyValues[i * 2 + 1];
+						System.out.println(value);
+					}*/
 					shutDown();
 				}
 			}
+
+			final int numBVHNodes = (numTris * 2 - 1);
+			/*
+			Binary tree with N leaf nodes has exactly N-1 internal nodes
+			N-1 internal nodes
+			N leaf nodes
+			2N-1 total nodes
+			We store the nodes in an array like [internalNodes, leafNodes]
+			*/
+
+			final int bvhNodeSize = 10;
+			/*
+			int3 aabb_min;
+			uint parent_index;
+			int3 aabb_max;
+			uint left_child_index;
+
+			uint right_child_index;
+			uint leaf_object_id_plus_one; // if this node is a leaf this will be != 0
+			 */
+			updateBuffer(bvhNodesBuffer,
+					GL43C.GL_ARRAY_BUFFER,
+					numBVHNodes * bvhNodeSize,
+					GL43C.GL_DYNAMIC_DRAW,
+					CL12.CL_MEM_READ_WRITE);
+			/*
+			// TODO:
+			for (2n-1) in parallel
+				if i >= offset for leaf {
+					nodes[i].leaf_object_id_plus_one = sorted_key_values[i-offset for leaf].key + 1;
+					// TODO: Write left/write child to some bogus number? 0xFFFFFFFF? (parent index will be written by the internal node logic below)
+					return;
+				} else {
+					nodes[i].leaf_object_id_plus_one = 0;
+				}
+				otherwise do the bvh internal node stuff
+			 */
 		}
 	}
 
