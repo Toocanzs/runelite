@@ -1,5 +1,5 @@
 #include version_header
-#include thread_count
+#include thread_config
 
 uniform uint num_items;
 

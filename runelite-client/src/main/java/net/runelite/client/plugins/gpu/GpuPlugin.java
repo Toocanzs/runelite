@@ -178,6 +178,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/init_min_max.glsl");
 	static final Shader MORTON_CODE_PROGRAM = new Shader()
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/morton_codes.glsl");
+	static final Shader BUILD_BVH_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/build_bvh.glsl");
 	static int glMinMaxBuffer;
 
 	static final int radixWorkGroupSize = 512;
@@ -186,7 +188,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	static final int radixBitsPerPass = 4;
 	static final int radixNumPasses = 32 / radixBitsPerPass;
 	static final int radixNumBuckets = 1 << radixBitsPerPass;
-
+	static final int mortonWorkGroupSize = 512;
+	static final int bvhWorkGroupSize = 512;
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -197,6 +200,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glMinMaxProgram;
 	private int glMinMaxSetupProgram;
 	private int glMortonCodeProgram;
+	private int glBuildBVHProgram;
 	private int glRadixSortProgram;
 	private int glUiProgram;
 
@@ -312,6 +316,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniRadixPassNumber;
 	private int uniMinMaxNumItems;
 	private int uniMortonCodeNumItems;
+	private int uniBuildBVHNumBVHNodes;
+	private int uniBuildBVHLeafNodeOffset;
 
 	private boolean lwjglInitted = false;
 
@@ -678,13 +684,14 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			glRadixCountDigitsProgram = RADIX_COUNT_DIGITS_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixWorkGroupSize));
 			glRadixComputeStartIndices = RADIX_COMPUTE_DIGIT_START_INDICES_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixNumBuckets)); // Thread config is not used here
 
-			glMinMaxProgram = MIN_MAX_PROGRAM.compile(createTemplate(radixWorkGroupSize,-1));
+			glMinMaxProgram = MIN_MAX_PROGRAM.compile(createTemplate(mortonWorkGroupSize,-1));
 			glMinMaxBuffer = GL43C.glGenBuffers();
 			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, glMinMaxBuffer);
 			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 6*4, GL43C.GL_DYNAMIC_DRAW); // NOTE: 6 ints for min x/y/z and max x/y/z, size = 4 bytes each
 
 			glMinMaxSetupProgram = MIN_MAX_SETUP_PROGRAM.compile(createTemplate(-1,-1));
-			glMortonCodeProgram = MORTON_CODE_PROGRAM.compile(createRadixTemplate(radixBitsPerPass, radixWorkGroupSize));
+			glMortonCodeProgram = MORTON_CODE_PROGRAM.compile(createTemplate(mortonWorkGroupSize,-1));
+			glBuildBVHProgram = BUILD_BVH_PROGRAM.compile(createTemplate(bvhWorkGroupSize,-1));
 
 			checkGLErrors();
 		}
@@ -735,6 +742,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		uniMinMaxNumItems = GL43C.glGetUniformLocation(glMinMaxProgram, "num_items");
 
 		uniMortonCodeNumItems = GL43C.glGetUniformLocation(glMortonCodeProgram, "num_items");
+		uniBuildBVHNumBVHNodes = GL43C.glGetUniformLocation(glBuildBVHProgram, "num_bvh_nodes");
+		uniBuildBVHLeafNodeOffset = GL43C.glGetUniformLocation(glBuildBVHProgram, "leaf_node_offset");
 
 		if (computeMode == ComputeMode.OPENGL)
 		{
@@ -775,6 +784,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glMortonCodeProgram);
 		glMortonCodeProgram = -1;
+
+		GL43C.glDeleteProgram(glBuildBVHProgram);
+		glBuildBVHProgram = -1;
 
 		GL43C.glDeleteProgram(glUiProgram);
 		glUiProgram = -1;
@@ -1180,27 +1192,18 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			final int numVertices = targetBufferOffset;
 			assert numVertices % 3 == 0 : "numVertices is not a multiple of three";
 			final int numTris = numVertices/3;
-			final int numBlocksVertices = (numVertices + radixWorkGroupSize - 1) / radixWorkGroupSize;
-			final int numBlocksTris = (numTris + radixWorkGroupSize - 1) / radixWorkGroupSize;
+			final int radixNumBlocksTris = (numTris + radixWorkGroupSize - 1) / radixWorkGroupSize;
 
 			// Calculate min/max of coordinates of the vertex buffer
 			// This is used when generating morton codes. We only have 10 bits per axis so we want to maximize the resolution by using space for only what exists in the scene
+			final int mortonNumBlocksVertices = (numVertices + mortonWorkGroupSize - 1) / mortonWorkGroupSize;
+			final int mortonNumBlocksTris = (numTris + mortonWorkGroupSize - 1) / mortonWorkGroupSize;
 			GL43C.glUseProgram(glMinMaxProgram);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpOutBuffer.glBufferId);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, glMinMaxBuffer);
 			GL43C.glUniform1ui(uniMinMaxNumItems, numVertices);
-			GL43C.glDispatchCompute(numBlocksVertices, 1, 1); // TODO: numBlocksVertices should be a separate thing from radixBlockSize. This has nothing to do with radix sort
+			GL43C.glDispatchCompute(mortonNumBlocksVertices, 1, 1);
 			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
-
-			final int singleControlBufferSizeUnaligned = (4 * 1 + 4 * numBlocksTris * radixNumBuckets); // 1 uint(4 bytes) for group id counter, numBlocks*numBuckets uints for the statuses (4 bytes each)
-			// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
-			final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
-			assert isPowerOfTwo(offsetAlignment) : "glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT) returned a non-power-of-two (" + offsetAlignment + "), and this code expects a power of two";
-
-			final int alignedControlBufferSize = ((singleControlBufferSizeUnaligned + offsetAlignment - 1) / offsetAlignment) * offsetAlignment; // NOTE: Assumes offsetAlignment is a power of two
-
-			// We allocate numPasses of these control buffers at once, and instead of clearing the data every pass we just move the pointer over to the extra previously cleared data
-			final int controlBufferRequiredSize = alignedControlBufferSize * radixNumPasses;
 
 			updateBuffer(mortonKeyValueBuffer,
 					GL43C.GL_ARRAY_BUFFER,
@@ -1220,8 +1223,18 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, glMinMaxBuffer);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, mortonKeyValueBuffer.glBufferId);
 			GL43C.glUniform1ui(uniMortonCodeNumItems, numTris);
-			GL43C.glDispatchCompute(numBlocksTris, 1, 1); // TODO: numBlocksTris should be a separate thing from radixBlockSize. This has nothing to do with radix sort
+			GL43C.glDispatchCompute(mortonNumBlocksTris, 1, 1);
 			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+			final int singleControlBufferSizeUnaligned = (4 * 1 + 4 * radixNumBlocksTris * radixNumBuckets); // 1 uint(4 bytes) for group id counter, numBlocks*numBuckets uints for the statuses (4 bytes each)
+			// Offsets for glBindBufferRange must be algined to the nearest GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
+			final int offsetAlignment = GL43C.glGetInteger(GL43C.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
+			assert isPowerOfTwo(offsetAlignment) : "glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT) returned a non-power-of-two (" + offsetAlignment + "), and this code expects a power of two";
+
+			final int alignedControlBufferSize = ((singleControlBufferSizeUnaligned + offsetAlignment - 1) / offsetAlignment) * offsetAlignment; // NOTE: Assumes offsetAlignment is a power of two
+
+			// We allocate numPasses of these control buffers at once, and instead of clearing the data every pass we just move the pointer over to the extra previously cleared data
+			final int controlBufferRequiredSize = alignedControlBufferSize * radixNumPasses;
 
 			// Sort the morton codes using radix sort
 			updateBuffer(radixControlBuffer,
@@ -1253,7 +1266,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, mortonKeyValueBuffer.glBufferId);
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, radixDigitStartIndicesBuffer.glBufferId);
 
-					GL43C.glDispatchCompute(numBlocksTris, 1, 1);
+					GL43C.glDispatchCompute(radixNumBlocksTris, 1, 1);
 					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
 					GL43C.glEndQuery(GL43C.GL_TIME_ELAPSED);
@@ -1284,7 +1297,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, destinationBuffer.glBufferId);
 					// Shift over the control buffer to the one corresponding to this pass
 					GL43C.glBindBufferRange(GL43C.GL_SHADER_STORAGE_BUFFER, 2, radixControlBuffer.glBufferId, alignedControlBufferSize * pass_number, singleControlBufferSizeUnaligned);
-					GL43C.glDispatchCompute(numBlocksTris, 1, 1);
+					GL43C.glDispatchCompute(radixNumBlocksTris, 1, 1);
 					GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 				}
 				assert (radixNumPasses & 1) == 0 : "numPasses is " + radixNumPasses + " which is not even, and the above code expects it to be even (mortonKeyValueBuffer would hold the second to last step in the sort otherwise)";
@@ -1337,6 +1350,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				}
 			}
 
+			final int numInternalNodes = (numTris - 1);
 			final int numBVHNodes = (numTris * 2 - 1);
 			/*
 			Binary tree with N leaf nodes has exactly N-1 internal nodes
@@ -1344,35 +1358,36 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			N leaf nodes
 			2N-1 total nodes
 			We store the nodes in an array like [internalNodes, leafNodes]
+
+			leaf_node_offset = N-1 = numInternalNodes
 			*/
 
-			final int bvhNodeSize = 10;
+			final int bvhNodeSize = 12;
 			/*
-			int3 aabb_min;
+			vec3 aabb_min;
 			uint parent_index;
-			int3 aabb_max;
+			vec3 aabb_max;
 			uint left_child_index;
 
 			uint right_child_index;
 			uint leaf_object_id_plus_one; // if this node is a leaf this will be != 0
+			uint thread_counter;
+			uint _unused;
 			 */
 			updateBuffer(bvhNodesBuffer,
 					GL43C.GL_ARRAY_BUFFER,
 					numBVHNodes * bvhNodeSize,
 					GL43C.GL_DYNAMIC_DRAW,
 					CL12.CL_MEM_READ_WRITE);
-			/*
-			// TODO:
-			for (2n-1) in parallel
-				if i >= offset for leaf {
-					nodes[i].leaf_object_id_plus_one = sorted_key_values[i-offset for leaf].key + 1;
-					// TODO: Write left/write child to some bogus number? 0xFFFFFFFF? (parent index will be written by the internal node logic below)
-					return;
-				} else {
-					nodes[i].leaf_object_id_plus_one = 0;
-				}
-				otherwise do the bvh internal node stuff
-			 */
+
+			final int numBlocksBVH = (numBVHNodes + bvhWorkGroupSize - 1) / bvhWorkGroupSize;
+
+			GL43C.glUseProgram(glBuildBVHProgram);
+			GL43C.glUniform1ui(uniBuildBVHNumBVHNodes, numBVHNodes);
+			GL43C.glUniform1ui(uniBuildBVHLeafNodeOffset, numInternalNodes);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, bvhNodesBuffer.glBufferId);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, mortonKeyValueBuffer.glBufferId);
+			GL43C.glDispatchCompute(numBlocksBVH, 1, 1);
 		}
 	}
 
