@@ -1,6 +1,13 @@
 #include version_header
 #include thread_config
 
+// The explaination of how this works can be found here
+// https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
+// and also a more formal explaination is in the paper here
+// https://developer.nvidia.com/blog/parallelforall/wp-content/uploads/2012/11/karras2012hpg_paper.pdf
+// Also the following DirectX-Graphics-Samples project is referenced heavily (licence included at the bottom of this file)
+// https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/BuildBVHSplits.hlsli
+
 uniform uint num_bvh_nodes;
 uniform uint num_elements;
 uniform uint leaf_node_offset;
