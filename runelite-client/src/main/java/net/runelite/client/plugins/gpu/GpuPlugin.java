@@ -317,6 +317,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniMinMaxNumItems;
 	private int uniMortonCodeNumItems;
 	private int uniBuildBVHNumBVHNodes;
+	private int uniBuildBVHNumElements;
 	private int uniBuildBVHLeafNodeOffset;
 
 	private boolean lwjglInitted = false;
@@ -743,6 +744,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		uniMortonCodeNumItems = GL43C.glGetUniformLocation(glMortonCodeProgram, "num_items");
 		uniBuildBVHNumBVHNodes = GL43C.glGetUniformLocation(glBuildBVHProgram, "num_bvh_nodes");
+		uniBuildBVHNumElements = GL43C.glGetUniformLocation(glBuildBVHProgram, "num_elements");
 		uniBuildBVHLeafNodeOffset = GL43C.glGetUniformLocation(glBuildBVHProgram, "leaf_node_offset");
 
 		if (computeMode == ComputeMode.OPENGL)
@@ -1384,6 +1386,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			GL43C.glUseProgram(glBuildBVHProgram);
 			GL43C.glUniform1ui(uniBuildBVHNumBVHNodes, numBVHNodes);
+			GL43C.glUniform1ui(uniBuildBVHNumElements, numTris);
 			GL43C.glUniform1ui(uniBuildBVHLeafNodeOffset, numInternalNodes);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, bvhNodesBuffer.glBufferId);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, mortonKeyValueBuffer.glBufferId);
