@@ -125,6 +125,14 @@ void main() {
             int first = range.x;
             int last = range.y;
 
+            if (first == 0 && last == (morton_key_value_count - 1)) {
+                // This is the root node.
+                // We set it's parent to itself so that when we go up the tree later to build AABBs, it will
+                // enter the root node a second time, and we exit on the second entry to any node (using thread_counter to keep track of how many other threads have touched the node)
+                // Basically this lets us terminate the AABB building easily at the root node
+                nodes[node_index].parent_index = node_index;
+            }
+
             int split = find_split(first, last);
 
             // If the split is at the start or the end of the range we grab a leaf node as the child instead of an internal one
