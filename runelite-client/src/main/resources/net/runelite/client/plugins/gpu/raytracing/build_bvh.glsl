@@ -5,7 +5,7 @@
 // https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
 // and also a more formal explaination is in the paper here
 // https://developer.nvidia.com/blog/parallelforall/wp-content/uploads/2012/11/karras2012hpg_paper.pdf
-// Also the following DirectX-Graphics-Samples project is referenced heavily (licence included at the bottom of this file)
+// Also the following DirectX-Graphics-Samples project was referenced heavily in writing this code (licence included at the bottom of this file)
 // https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/BuildBVHSplits.hlsli
 
 uniform uint num_bvh_nodes;
@@ -148,7 +148,8 @@ void main() {
     }
 }
 
-// A few functions werre translated from the following project https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/BuildBVHSplits.hlsli
+// A few functions were translated from the following project 
+// https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/BuildBVHSplits.hlsli
 // License of that project is included below.
 
 /*
