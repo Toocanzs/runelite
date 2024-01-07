@@ -744,7 +744,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		uniMortonCodeNumItems = GL43C.glGetUniformLocation(glMortonCodeProgram, "num_items");
 		uniBuildBVHNumBVHNodes = GL43C.glGetUniformLocation(glBuildBVHProgram, "num_bvh_nodes");
-		uniBuildBVHNumElements = GL43C.glGetUniformLocation(glBuildBVHProgram, "num_elements");
+		uniBuildBVHNumElements = GL43C.glGetUniformLocation(glBuildBVHProgram, "morton_key_value_count");
 		uniBuildBVHLeafNodeOffset = GL43C.glGetUniformLocation(glBuildBVHProgram, "leaf_node_offset");
 
 		if (computeMode == ComputeMode.OPENGL)

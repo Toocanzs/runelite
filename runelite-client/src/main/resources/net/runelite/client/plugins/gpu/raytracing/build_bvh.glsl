@@ -9,7 +9,7 @@
 // https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Libraries/D3D12RaytracingFallback/src/BuildBVHSplits.hlsli
 
 uniform uint num_bvh_nodes;
-uniform uint num_elements;
+uniform uint morton_key_value_count;
 uniform uint leaf_node_offset;
 #define internal_node_offset 0
 
@@ -46,14 +46,14 @@ int count_leading_zeros(uint num) {
 }
 
 int get_longest_common_prefix(int indexA, int indexB) {
-    if (indexA < 0 || indexB < 0 || indexA >= num_elements || indexB >= num_elements) return -1;
+    if (indexA < 0 || indexB < 0 || indexA >= morton_key_value_count || indexB >= morton_key_value_count) return -1;
 
     uint mortonA = sorted_key_values[indexA].value;
     uint mortonB = sorted_key_values[indexB].value;
     if (mortonA != mortonB) {
         return count_leading_zeros(mortonA ^ mortonB);
     }
-    return count_leading_zeros(uint(indexA) ^ uint(indexB)) + 31;
+    return count_leading_zeros(uint(indexA) ^ uint(indexB)) + 31; // TODO: Paper seems to only use count_leading_zeros(indexA ^ indexB) without the + 31 that the DirectX example does
 }
 
 ivec2 determine_range(int index) {
@@ -114,9 +114,12 @@ void main() {
         nodes[node_index].thread_counter = 0;
 
         if (node_index >= leaf_node_offset) {
+            // Leaf node
+            // Just set the object ID and do nothing else
             nodes[node_index].leaf_object_id_plus_one = sorted_key_values[node_index - leaf_node_offset].key + 1;
         } else {
-            nodes[node_index].leaf_object_id_plus_one = 0;
+            // Internal node
+            nodes[node_index].leaf_object_id_plus_one = 0; // Internal nodes have no object ID
 
             ivec2 range = determine_range(int(node_index));
             int first = range.x;
@@ -124,6 +127,7 @@ void main() {
 
             int split = find_split(first, last);
 
+            // If the split is at the start or the end of the range we grab a leaf node as the child instead of an internal one
             uint left_child_index;
             if (split == first) {
                 left_child_index = split + leaf_node_offset;
