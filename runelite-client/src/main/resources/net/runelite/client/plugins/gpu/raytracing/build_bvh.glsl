@@ -4,6 +4,7 @@
 uniform uint num_bvh_nodes;
 uniform uint num_elements;
 uniform uint leaf_node_offset;
+#define internal_node_offset 0
 
 struct KeyValue {
     uint key;
@@ -37,25 +38,19 @@ int count_leading_zeros(uint num) {
     return 31 - findMSB(num);
 }
 
-int get_longest_common_prefix(uint indexA, uint indexB) {
-    if (indexA >= num_elements || indexB >= num_elements) return -1;
+int get_longest_common_prefix(int indexA, int indexB) {
+    if (indexA < 0 || indexB < 0 || indexA >= num_elements || indexB >= num_elements) return -1;
 
     uint mortonA = sorted_key_values[indexA].value;
     uint mortonB = sorted_key_values[indexB].value;
     if (mortonA != mortonB) {
         return count_leading_zeros(mortonA ^ mortonB);
     }
-    return count_leading_zeros(indexA ^ indexB) + 31;
+    return count_leading_zeros(uint(indexA) ^ uint(indexB)) + 31;
 }
 
-uvec2 determine_range(uint index) {
-    int prefixPlusOne = get_longest_common_prefix(index, index + 1);
-    // The DirectX example seems to rely on integer overflow wrapping with the `index - 1` here
-    // which would wrap to 0xFFFFFFFF and then get_longest_common_prefix returns -1 for being out of bounds
-    // Although I can't find anything in the spec mentioning wrapping behaviour for HLSL, it's clear that GLSL does not define wrapping behaviour
-    // So we'll just return -1 if index is 0
-    int prefixMinusOne = index == 0 ? -1 : get_longest_common_prefix(index, index - 1);
-    int d = prefixPlusOne - prefixMinusOne;
+ivec2 determine_range(int index) {
+    int d = get_longest_common_prefix(index, index + 1) - get_longest_common_prefix(index, index - 1);
     d = clamp(d, -1, 1); // TODO: replace with sign() like the paper does?
     int min_prefix = get_longest_common_prefix(index, index - d);
 
@@ -72,15 +67,36 @@ uvec2 determine_range(uint index) {
         }
     }
 
+    int j = index + len * d;
+    return ivec2(min(index, j), max(index, j));
+}
 
+int find_split(int first, int last) {
+    uint first_code = sorted_key_values[first].value;
+    uint last_code = sorted_key_values[last].value;
 
+    if (first_code == last_code)
+        return (first + last) >> 1;
+    
+    int common_prefix = get_longest_common_prefix(first, last);
+    int split = first;
+    int step = last - first;
+    do
+    {
+        step = (step + 1) >> 1;
+        int new_split = split + step;
 
-    int j = int(index) + len * d;
+        if (new_split < last)
+        {
+            uint split_code = sorted_key_values[new_split].value;
+            int split_prefix = get_longest_common_prefix(first, new_split);
+            if (split_prefix > common_prefix)
+                split = new_split;
+        }
+    }
+    while (step > 1);
 
-
-
-
-    return uvec2(min(index, uint(j)), max(index, uint(j)));
+    return split;
 }
 
 layout(local_size_x = THREAD_COUNT) in;
@@ -95,10 +111,33 @@ void main() {
         } else {
             nodes[node_index].leaf_object_id_plus_one = 0;
 
-            // TODO: BVH STUFF
-        }
+            ivec2 range = determine_range(int(node_index));
+            int first = range.x;
+            int last = range.y;
 
-        // TODO: root node node_index == 0
+            int split = find_split(first, last);
+
+            uint left_child_index;
+            if (split == first) {
+                left_child_index = split + leaf_node_offset;
+            } else {
+                left_child_index = split + internal_node_offset;
+            }
+
+            uint right_child_index;
+            if (split + 1 == last) {
+                right_child_index = split + leaf_node_offset + 1;
+            } else {
+                right_child_index = split + internal_node_offset + 1;
+            }
+
+            // Write children
+            nodes[node_index].left_child_index = left_child_index;
+            nodes[node_index].right_child_index = right_child_index;
+            // Write children's parent
+            nodes[left_child_index].parent_index = node_index;
+            nodes[right_child_index].parent_index = node_index;
+        }
     }
 }
 
