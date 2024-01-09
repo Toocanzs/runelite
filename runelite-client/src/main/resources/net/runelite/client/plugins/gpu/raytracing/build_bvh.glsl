@@ -1,6 +1,7 @@
 #include version_header
 #include thread_config
 
+
 // The explaination of how this works can be found here
 // https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
 // and also a more formal explaination is in the paper here
@@ -18,20 +19,7 @@ struct KeyValue {
     uint value;
 };
 
-struct BVHNode {
-    // NOTE: The placement of the vec3 components is important here.
-    // We want no padding to reduce the total size of this struct, and since it would pad up to vec4 size, we put a uint after the vec3 in place of the would-be padding
-    vec3 aabb_min;
-    uint parent_index;
-
-    vec3 aabb_max;
-    uint left_child_index;
-
-    uint right_child_index;
-    uint leaf_object_id_plus_one; // if this node is a leaf this will be != 0
-    uint thread_counter;
-    uint _unused; // To pad up to 12*4 bytes (may not be needed?)
-};
+#include "raytracing/bvh_node.glsl"
 
 layout(std430, binding = 0) writeonly buffer _nodes {
     BVHNode nodes[];
@@ -39,6 +27,10 @@ layout(std430, binding = 0) writeonly buffer _nodes {
 
 layout(std430, binding = 1) readonly buffer _sorted_key_values {
     KeyValue sorted_key_values[];
+};
+
+layout(std430, binding = 2) readonly buffer _vertex_buffer {
+    ivec4 vertex_buffer[];
 };
 
 int count_leading_zeros(uint num) {
@@ -115,8 +107,19 @@ void main() {
 
         if (node_index >= leaf_node_offset) {
             // Leaf node
-            // Just set the object ID and do nothing else
-            nodes[node_index].leaf_object_id_plus_one = sorted_key_values[node_index - leaf_node_offset].key + 1;
+            uint triangle_index = node_index - leaf_node_offset;
+
+            uint base_vertex_index = triangle_index * 3;
+            ivec3 vA = vertex_buffer[base_vertex_index + 0].xyz;
+            ivec3 vB = vertex_buffer[base_vertex_index + 1].xyz;
+            ivec3 vC = vertex_buffer[base_vertex_index + 2].xyz;
+
+            ivec3 aabb_min = min(vA, min(vB, vC));
+            ivec3 aabb_max = max(vA, max(vB, vC));
+
+            nodes[node_index].leaf_object_id_plus_one = sorted_key_values[triangle_index].key + 1;
+            nodes[node_index].aabb_min = aabb_min;
+            nodes[node_index].aabb_max = aabb_max;
         } else {
             // Internal node
             nodes[node_index].leaf_object_id_plus_one = 0; // Internal nodes have no object ID

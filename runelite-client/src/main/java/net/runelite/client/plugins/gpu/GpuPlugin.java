@@ -180,6 +180,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/morton_codes.glsl");
 	static final Shader BUILD_BVH_PROGRAM = new Shader()
 			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/build_bvh.glsl");
+	static final Shader CALCULATE_BVH_AABB_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "raytracing/calculate_bvh_aabbs.glsl");
 	static int glMinMaxBuffer;
 
 	static final int radixWorkGroupSize = 512;
@@ -190,6 +192,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	static final int radixNumBuckets = 1 << radixBitsPerPass;
 	static final int mortonWorkGroupSize = 512;
 	static final int bvhWorkGroupSize = 512;
+	static final int bvhAABBWorkGroupSize = 512;
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -201,6 +204,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int glMinMaxSetupProgram;
 	private int glMortonCodeProgram;
 	private int glBuildBVHProgram;
+	private int glCalculateBVHAABBsProgram;
 	private int glRadixSortProgram;
 	private int glUiProgram;
 
@@ -319,6 +323,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniBuildBVHNumBVHNodes;
 	private int uniBuildBVHNumElements;
 	private int uniBuildBVHLeafNodeOffset;
+	private int uniCalculateBVHAABBLeafNodeCount;
+	private int uniCalculateBVHAABBLeafNodeOffset;
 
 	private boolean lwjglInitted = false;
 
@@ -690,9 +696,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, glMinMaxBuffer);
 			GL43C.glBufferData(GL43C.GL_SHADER_STORAGE_BUFFER, 6*4, GL43C.GL_DYNAMIC_DRAW); // NOTE: 6 ints for min x/y/z and max x/y/z, size = 4 bytes each
 
+			// TODO: Don't use the faces per thread template for this
 			glMinMaxSetupProgram = MIN_MAX_SETUP_PROGRAM.compile(createTemplate(-1,-1));
 			glMortonCodeProgram = MORTON_CODE_PROGRAM.compile(createTemplate(mortonWorkGroupSize,-1));
 			glBuildBVHProgram = BUILD_BVH_PROGRAM.compile(createTemplate(bvhWorkGroupSize,-1));
+			glCalculateBVHAABBsProgram = CALCULATE_BVH_AABB_PROGRAM.compile(createTemplate(bvhAABBWorkGroupSize, -1));
 
 			checkGLErrors();
 		}
@@ -743,9 +751,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		uniMinMaxNumItems = GL43C.glGetUniformLocation(glMinMaxProgram, "num_items");
 
 		uniMortonCodeNumItems = GL43C.glGetUniformLocation(glMortonCodeProgram, "num_items");
+
 		uniBuildBVHNumBVHNodes = GL43C.glGetUniformLocation(glBuildBVHProgram, "num_bvh_nodes");
 		uniBuildBVHNumElements = GL43C.glGetUniformLocation(glBuildBVHProgram, "morton_key_value_count");
 		uniBuildBVHLeafNodeOffset = GL43C.glGetUniformLocation(glBuildBVHProgram, "leaf_node_offset");
+
+		uniCalculateBVHAABBLeafNodeCount = GL43C.glGetUniformLocation(glCalculateBVHAABBsProgram, "leaf_node_count");
+		uniCalculateBVHAABBLeafNodeOffset = GL43C.glGetUniformLocation(glCalculateBVHAABBsProgram, "leaf_node_offset");
 
 		if (computeMode == ComputeMode.OPENGL)
 		{
@@ -789,6 +801,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glBuildBVHProgram);
 		glBuildBVHProgram = -1;
+
+		GL43C.glDeleteProgram(glCalculateBVHAABBsProgram);
+		glCalculateBVHAABBsProgram = -1;
 
 		GL43C.glDeleteProgram(glUiProgram);
 		glUiProgram = -1;
@@ -1353,44 +1368,43 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			}
 
 			final int numInternalNodes = (numTris - 1);
-			final int numBVHNodes = (numTris * 2 - 1);
+			final int numLeafNodes = numTris;
+			final int totalNumBVHNodes = (numTris * 2 - 1);
+			final int leafNodeOfffset = numInternalNodes;
 			/*
 			Binary tree with N leaf nodes has exactly N-1 internal nodes
 			N-1 internal nodes
 			N leaf nodes
 			2N-1 total nodes
 			We store the nodes in an array like [internalNodes, leafNodes]
-
-			leaf_node_offset = N-1 = numInternalNodes
 			*/
 
-			final int bvhNodeSize = 12;
-			/*
-			vec3 aabb_min;
-			uint parent_index;
-			vec3 aabb_max;
-			uint left_child_index;
-
-			uint right_child_index;
-			uint leaf_object_id_plus_one; // if this node is a leaf this will be != 0
-			uint thread_counter;
-			uint _unused;
-			 */
+			final int bvhNodeSizeInBytes = 12;
 			updateBuffer(bvhNodesBuffer,
 					GL43C.GL_ARRAY_BUFFER,
-					numBVHNodes * bvhNodeSize,
+					totalNumBVHNodes * bvhNodeSizeInBytes,
 					GL43C.GL_DYNAMIC_DRAW,
 					CL12.CL_MEM_READ_WRITE);
 
-			final int numBlocksBVH = (numBVHNodes + bvhWorkGroupSize - 1) / bvhWorkGroupSize;
+			final int numBlocksBVH = (totalNumBVHNodes + bvhWorkGroupSize - 1) / bvhWorkGroupSize;
 
 			GL43C.glUseProgram(glBuildBVHProgram);
-			GL43C.glUniform1ui(uniBuildBVHNumBVHNodes, numBVHNodes);
+			GL43C.glUniform1ui(uniBuildBVHNumBVHNodes, totalNumBVHNodes);
 			GL43C.glUniform1ui(uniBuildBVHNumElements, numTris);
-			GL43C.glUniform1ui(uniBuildBVHLeafNodeOffset, numInternalNodes);
+			GL43C.glUniform1ui(uniBuildBVHLeafNodeOffset, leafNodeOfffset);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, bvhNodesBuffer.glBufferId);
 			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, mortonKeyValueBuffer.glBufferId);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpOutBuffer.glBufferId);
 			GL43C.glDispatchCompute(numBlocksBVH, 1, 1);
+			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+			final int numBlocksBVHAABB = (numLeafNodes + bvhAABBWorkGroupSize - 1) / bvhAABBWorkGroupSize;
+			GL43C.glUseProgram(glCalculateBVHAABBsProgram);
+			GL43C.glUniform1ui(uniCalculateBVHAABBLeafNodeCount, numLeafNodes);
+			GL43C.glUniform1ui(uniCalculateBVHAABBLeafNodeOffset, leafNodeOfffset);
+			GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, bvhNodesBuffer.glBufferId);
+			GL43C.glDispatchCompute(numBlocksBVHAABB, 1, 1);
+			GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 		}
 	}
 
