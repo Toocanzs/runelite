@@ -94,7 +94,7 @@ uint signBit(float f) {
 float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node, float best_triangle_distance) {
   // https://tavianator.com/2022/ray_box_boundary.html
   float tmin = 0;
-  float tmax = uintBitsToFloat(0x7F800000); // positive infinity as uint float bytes
+  float tmax = INFINITY;
   for (int d = 0; d < 3; d++) {
     bool sign = bool(signBit(invRayDir[d]));
     ivec3 bminCorner = sign ? node.aabb_max : node.aabb_min;
@@ -108,12 +108,8 @@ float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node, float best_triangl
     tmin = max(dmin, tmin);
     tmax = min(dmax, tmax);
   }
-  if (tmin < tmax) {
-    //if (tmin > best_triangle_distance) return INFINITY;
-    return tmin;
-  } else {
-    return INFINITY;
-  }
+  tmax = min(tmax, best_triangle_distance);
+  return tmin < tmax ? tmin : INFINITY;
 }
 
 float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node) {
@@ -191,64 +187,7 @@ void main() {
     float distance1 = intersect(rayOrigin, invRayDir, bvh_nodes[child1], best_triangle_distance);
     float distance2 = intersect(rayOrigin, invRayDir, bvh_nodes[child2], best_triangle_distance);
 
-    if (distance1 != INFINITY) stack[stack_pointer++] = child1;
-    if (distance2 != INFINITY) stack[stack_pointer++] = child2;
-
-    if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
-    /*if (distance1 == INFINITY) {
-      if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
-      if (distance2 != INFINITY) stack[stack_pointer++] = child2;
-    } else {
-      if (distance2 == INFINITY) {
-        if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
-      } else {
-        current_node_index = child2;
-      }
-    }8/
-
-    /*if (distance1 != INFINITY) {
-      current_node_index = child1;
-      if (distance2 != INFINITY) {
-        stack[stack_pointer++] = child2;
-      }
-    } else {
-      if (distance2 != INFINITY) {
-        current_node_index = child2;
-      }
-    }*/
-
-    /*float closest_child_distance;
-    uint closest_child;
-    float furthest_child_distance;
-    uint furthest_child;
-    if (distance1 < distance2) {
-      closest_child_distance = distance1;
-      furthest_child_distance = distance2;
-      closest_child = child1;
-      furthest_child = child2;
-    } else {
-      closest_child_distance = distance2;
-      furthest_child_distance = distance1;
-      closest_child = child2;
-      furthest_child = child1;
-    }
-
-    if (closest_child_distance == INFINITY) {
-      if (stack_pointer == 0) {
-        break;
-      } else {
-        current_node_index = stack[--stack_pointer];
-      }
-      continue;
-    } else {
-      current_node_index = closest_child;
-      if (furthest_child_distance != INFINITY) {
-        stack[stack_pointer++] = furthest_child;
-      }
-    }*/
-    
-
-    /*if (distance1 > distance2) {
+    if (distance1 > distance2) {
       swap(distance1, distance2);
       swap(child1, child2);
     }
@@ -259,13 +198,11 @@ void main() {
         current_node_index = stack[--stack_pointer];
       }
     } else {
-      aabb_hit_count++;
       current_node_index = child1;
       if (distance2 != INFINITY) { 
-        aabb_hit_count++;
         stack[stack_pointer++] = child2;
       }
-    }*/
+    }
   }
 
   //c.rgb = vec3(aabb_hit_count)/500;
