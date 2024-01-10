@@ -48,62 +48,16 @@ int get_longest_common_prefix(int indexA, int indexB) {
     return count_leading_zeros(uint(indexA) ^ uint(indexB)) + 31; // TODO: Paper seems to only use count_leading_zeros(indexA ^ indexB) without the + 31 that the DirectX example does
 }
 
-ivec2 determine_range(int index) {
-    int d = get_longest_common_prefix(index, index + 1) - get_longest_common_prefix(index, index - 1);
-    d = clamp(d, -1, 1); // TODO: replace with sign() like the paper does?
-    int min_prefix = get_longest_common_prefix(index, index - d);
-
-    int max_length = 2;
-    while (get_longest_common_prefix(index, index + max_length * d) > min_prefix) {
-        max_length *= 4; // TODO: Use 2 instead of 4 like the paper does?
-    }
-
-    int len = 0;
-    for (int t = max_length / 2; t > 0; t /= 2) {
-        if (get_longest_common_prefix(index, index + (len + t) * d) > min_prefix)
-        {
-            len = len + t;
-        }
-    }
-
-    int j = index + len * d;
-    return ivec2(min(index, j), max(index, j));
-}
-
-int find_split(int first, int last) {
-    uint first_code = sorted_key_values[first].value;
-    uint last_code = sorted_key_values[last].value;
-
-    if (first_code == last_code)
-        return (first + last) >> 1;
-    
-    int common_prefix = get_longest_common_prefix(first, last);
-    int split = first;
-    int step = last - first;
-    do
-    {
-        step = (step + 1) >> 1;
-        int new_split = split + step;
-
-        if (new_split < last)
-        {
-            uint split_code = sorted_key_values[new_split].value;
-            int split_prefix = get_longest_common_prefix(first, new_split);
-            if (split_prefix > common_prefix)
-                split = new_split;
-        }
-    }
-    while (step > 1);
-
-    return split;
-}
-
 layout(local_size_x = THREAD_COUNT) in;
 void main() {
     if (gl_GlobalInvocationID.x < num_bvh_nodes) {
         uint node_index = gl_GlobalInvocationID.x;
 
+        
+        nodes[node_index].left_child_index = 0xFFFFFFFF;
+        nodes[node_index].right_child_index = 0xFFFFFFFF;
         nodes[node_index].thread_counter = 0;
+        barrier();
 
         if (node_index >= leaf_node_offset) {
             // Leaf node
@@ -123,31 +77,53 @@ void main() {
         } else {
             // Internal node
             nodes[node_index].leaf_object_id_plus_one = 0; // Internal nodes have no object ID
-
-            ivec2 range = determine_range(int(node_index));
-            int first = range.x;
-            int last = range.y;
-
-            if (first == 0 && last == (morton_key_value_count - 1)) {
-                // This is the root node.
-                // We set it's parent to itself so that when we go up the tree later to build AABBs, it will
-                // enter the root node a second time, and we exit on the second entry to any node (using thread_counter to keep track of how many other threads have touched the node)
-                // Basically this lets us terminate the AABB building easily at the root node
-                nodes[node_index].parent_index = node_index;
+            if (node_index == 0) { // Root node
+                nodes[node_index].parent_index = 0xFFFFFFFF;
             }
 
-            int split = find_split(first, last);
+            // Determine direction of the range
+            int i = int(node_index);
+            int d = sign(get_longest_common_prefix(i, i + 1) - get_longest_common_prefix(i, i - 1));
+            // Compute upper bound for the length of the range
+            int delta_min = get_longest_common_prefix(i, i - d);
+            int l_max = 2;
+            while (get_longest_common_prefix(i, i + l_max * d) > delta_min) {
+                l_max = l_max * 2;
+            }
+            
+            // Find the other end using binary search
+            int l = 0;
+            for (int t = l_max; t >= 1; t /= 2) {
+                if (get_longest_common_prefix(i, i + (l + t) * d) > delta_min) {
+                    l = l + t;
+                }
+            }
+            int j = i + l * d;
+            // Find the split position using binary search
+            int delta_node = get_longest_common_prefix(i, j);
+            int s = 0;
+            int divisor = 2;
+            while (true) {
+                // For loop version was annoying to do with the ceiling function so we're doing a while loop I guess
+                int t = int(ceil(float(l)/divisor)); // TODO: DivideAndRoundUp{ return (dividend - 1) / divisor + 1; }
+                if (get_longest_common_prefix(i, i + (s + t) * d) > delta_node) {
+                    s = s + t;
+                }
+                if (t <= 1) break;
+                divisor *= 2;
+            }
+            
+            int split = i + s * d + min(d, 0);
 
-            // If the split is at the start or the end of the range we grab a leaf node as the child instead of an internal one
             uint left_child_index;
-            if (split == first) {
+            if (min(i, j) == split) {
                 left_child_index = split + leaf_node_offset;
             } else {
                 left_child_index = split + internal_node_offset;
             }
 
             uint right_child_index;
-            if (split + 1 == last) {
+            if (max(i, j) == (split + 1)) {
                 right_child_index = split + leaf_node_offset + 1;
             } else {
                 right_child_index = split + internal_node_offset + 1;

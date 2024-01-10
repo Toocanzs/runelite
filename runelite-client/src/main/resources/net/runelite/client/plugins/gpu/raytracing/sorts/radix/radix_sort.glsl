@@ -37,12 +37,12 @@ shared uint lookback_sums[NUM_BUCKETS];
 
 #define SPIN_WHILE(value_to_write_to, value_to_read_from, condition) \
     do {\
-        value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
+        value_to_write_to = atomicCompSwap(value_to_read_from, 0xFFFFFFFF, 0xFFFFFFFF);\
     } while ((condition));
 
 #define SPIN_WHILE_ZERO(value_to_write_to, value_to_read_from) \
     do {\
-        value_to_write_to = atomicCompSwap(value_to_read_from, 0, 0);\
+        value_to_write_to = atomicCompSwap(value_to_read_from, 0xFFFFFFFF, 0xFFFFFFFF);\
     } while (value_to_write_to == 0);
 
 #define STATUS_VALUE_BITMASK 0x3FFFFFFF
