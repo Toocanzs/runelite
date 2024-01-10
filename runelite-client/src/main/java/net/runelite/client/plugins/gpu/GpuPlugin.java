@@ -1192,8 +1192,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDispatchCompute(largeModels, 1, 1);
 
-		buildBVH();
-
 		checkGLErrors();
 	}
 
@@ -1409,7 +1407,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				GL43C.glDispatchCompute(numBlocksBVHAABB, 1, 1);
 				GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
 
-				if (bvh_test_once == 0) {
+				if (bvh_test_once == 0 && false) {
 					bvh_test_once++;
 					int[] bvhNodeInts = new int[totalNumBVHNodes*(bvhNodeSizeInBytes/4)];
 					GL43C.glBindBuffer(GL43C.GL_SHADER_STORAGE_BUFFER, bvhNodesBuffer.glBufferId);
@@ -1823,6 +1821,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		int vertexCount = targetBufferOffset; // NOTE: 4 from is vA,vB,vC,alphaPrioritycolor
 
+		buildBVH();
 		// Texture on UI
 		drawUi(overlayColor, canvasHeight, canvasWidth, vertexCount);
 

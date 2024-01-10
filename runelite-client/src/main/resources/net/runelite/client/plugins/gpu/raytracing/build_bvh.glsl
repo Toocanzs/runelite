@@ -71,7 +71,7 @@ void main() {
             ivec3 aabb_min = min(vA, min(vB, vC));
             ivec3 aabb_max = max(vA, max(vB, vC));
 
-            nodes[node_index].leaf_object_id_plus_one = sorted_key_values[triangle_index].key + 1;
+            nodes[node_index].leaf_object_id_plus_one = triangle_index + 1;
             nodes[node_index].aabb_min = aabb_min;
             nodes[node_index].aabb_max = aabb_max;
         } else {

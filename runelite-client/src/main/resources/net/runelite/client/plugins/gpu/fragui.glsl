@@ -91,7 +91,7 @@ uint signBit(float f) {
 
 #define INFINITY uintBitsToFloat(0x7F800000)
 
-float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node) {
+float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node, float best_triangle_distance) {
   // https://tavianator.com/2022/ray_box_boundary.html
   float tmin = 0;
   float tmax = uintBitsToFloat(0x7F800000); // positive infinity as uint float bytes
@@ -108,14 +108,29 @@ float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node) {
     tmin = max(dmin, tmin);
     tmax = min(dmax, tmax);
   }
-  return tmin < tmax ? tmin : INFINITY;
+  if (tmin < tmax) {
+    //if (tmin > best_triangle_distance) return INFINITY;
+    return tmin;
+  } else {
+    return INFINITY;
+  }
 }
 
-bool intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node) {
-  float dont_care;
-  return intersect(rayOrigin, invRayDir, node, dont_care);
+float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node) {
+  return intersect(rayOrigin, invRayDir, node, INFINITY);
 }
 
+void swap(inout float x, inout float y) {
+  float temp = x;
+  x = y;
+  y = temp;
+}
+
+void swap(inout uint x, inout uint y) {
+  uint temp = x;
+  x = y;
+  y = temp;
+}
 
 void main() {
   vec4 c;
@@ -137,50 +152,123 @@ void main() {
   float lowestDepth = uintBitsToFloat(0x7F800000); // positive infinity as uint float bytes
   BVHNode root = bvh_nodes[0];
 
-  /*while (root.leaf_object_id_plus_one == 0) {
-    root = bvh_nodes[root.left_child_index];
-  }*/
-
   bool intersected_root = intersect(rayOrigin, invRayDir, root) != INFINITY;
 
-  /*BVHNode current_node = root;
+  uint current_node_index = 0;
   #define STACK_SIZE 64
-  int stack[STACK_SIZE];
+  uint stack[STACK_SIZE];
   uint stack_pointer = 0;
+  float best_triangle_distance = INFINITY;
+  uint best_triangle_index = 0xFFFFFFFF;
+  uint aabb_hit_count = 0;
   while (intersected_root && stack_pointer < STACK_SIZE) {
     // Stack based traversal from https://jacco.ompf2.com/2022/04/18/how-to-build-a-bvh-part-2-faster-rays/
-    if (nodes[current_node].leaf_object_id_plus_one == 0) {// leaf
-      uint triangle_index = nodes[current_node].leaf_object_id_plus_one - 1;
-      ivec4 vA = Vertexbuffer.vb[triangle_index + 0];
-      ivec4 vB = Vertexbuffer.vb[triangle_index + 1];
-      ivec4 vC = Vertexbuffer.vb[triangle_index + 2];
+    if (bvh_nodes[current_node_index].leaf_object_id_plus_one != 0) {// leaf
+      uint triangle_index = bvh_nodes[current_node_index].leaf_object_id_plus_one - 1;
+      uint base_vertex_index = triangle_index * 3;
+      ivec3 vA = Vertexbuffer.vb[base_vertex_index + 0].xyz;
+      ivec3 vB = Vertexbuffer.vb[base_vertex_index + 1].xyz;
+      ivec3 vC = Vertexbuffer.vb[base_vertex_index + 2].xyz;
 
-      vec3 tuv = triIntersect(rayOrigin, rayDir, vec3(vA.x, vA.y, vA.z), vec3(vB.x, vB.y, vB.z), vec3(vC.x, vC.y, vC.z));
-      // hit = tuv.x >= 0;
-      // TODO: Store this triangle index as the closest along with the depth, only sample at the end
+      // TODO: use a hit test here without uvs
+      vec3 tuv = triIntersect(rayOrigin, rayDir, vec3(vA), vec3(vB), vec3(vC));
+      if (tuv.x >= 0) {
+        if (tuv.x < best_triangle_distance) {
+          best_triangle_distance = tuv.x;
+          best_triangle_index = triangle_index;
+        }
+      }
       if (stack_pointer == 0) {
         break;
       } else {
-        current_node = stack[--stack_pointer];
+        current_node_index = stack[--stack_pointer];
       }
       continue;
     }
-    uint left_child_index = nodes[current_node].left_child_index;
-    uint right_child_index = nodes[current_node].left_child_index;
+    uint child1 = bvh_nodes[current_node_index].left_child_index;
+    uint child2 = bvh_nodes[current_node_index].right_child_index;
 
-    float distance1 = intersect(rayOrigin, invRayDir, nodes[left_child_index], distance_left);
-    float distance2 = intersect(rayOrigin, invRayDir, nodes[right_child_index], distance_right);
+    float distance1 = intersect(rayOrigin, invRayDir, bvh_nodes[child1], best_triangle_distance);
+    float distance2 = intersect(rayOrigin, invRayDir, bvh_nodes[child2], best_triangle_distance);
 
-    if (distance1 > distance2) {
+    if (distance1 != INFINITY) stack[stack_pointer++] = child1;
+    if (distance2 != INFINITY) stack[stack_pointer++] = child2;
 
+    if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
+    /*if (distance1 == INFINITY) {
+      if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
+      if (distance2 != INFINITY) stack[stack_pointer++] = child2;
+    } else {
+      if (distance2 == INFINITY) {
+        if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
+      } else {
+        current_node_index = child2;
+      }
+    }8/
+
+    /*if (distance1 != INFINITY) {
+      current_node_index = child1;
+      if (distance2 != INFINITY) {
+        stack[stack_pointer++] = child2;
+      }
+    } else {
+      if (distance2 != INFINITY) {
+        current_node_index = child2;
+      }
+    }*/
+
+    /*float closest_child_distance;
+    uint closest_child;
+    float furthest_child_distance;
+    uint furthest_child;
+    if (distance1 < distance2) {
+      closest_child_distance = distance1;
+      furthest_child_distance = distance2;
+      closest_child = child1;
+      furthest_child = child2;
+    } else {
+      closest_child_distance = distance2;
+      furthest_child_distance = distance1;
+      closest_child = child2;
+      furthest_child = child1;
     }
-  }*/
-  
-  int hits = 0;
-  int count = 0;
-  if (intersected_root) {
-    c.rgb = vec3(1,0,1);
+
+    if (closest_child_distance == INFINITY) {
+      if (stack_pointer == 0) {
+        break;
+      } else {
+        current_node_index = stack[--stack_pointer];
+      }
+      continue;
+    } else {
+      current_node_index = closest_child;
+      if (furthest_child_distance != INFINITY) {
+        stack[stack_pointer++] = furthest_child;
+      }
+    }*/
+    
+
+    /*if (distance1 > distance2) {
+      swap(distance1, distance2);
+      swap(child1, child2);
+    }
+    if (distance1 == INFINITY) {
+      if (stack_pointer == 0) {
+        break;
+      } else {
+        current_node_index = stack[--stack_pointer];
+      }
+    } else {
+      aabb_hit_count++;
+      current_node_index = child1;
+      if (distance2 != INFINITY) { 
+        aabb_hit_count++;
+        stack[stack_pointer++] = child2;
+      }
+    }*/
   }
+
+  //c.rgb = vec3(aabb_hit_count)/500;
   /*for (int i = 0; i < vertexCount; i+=3) {
     ivec4 vA = Vertexbuffer.vb[i + 0];
     ivec4 vB = Vertexbuffer.vb[i + 1];
@@ -195,12 +283,38 @@ void main() {
 
         vec3 barry = vec3(1.0 - tuv.y - tuv.z, tuv.y, tuv.z);
         c.rgb = barry.x * colorA + barry.y * colorB + barry.z * colorC;
+        c.a = 1;
         lowestDepth = tuv.x;
     }
   }*/
 
   c = alphaBlend(c, alphaOverlay);
   c.rgb = colorblind(colorBlindMode, c.rgb);
+
+  if (best_triangle_index != 0xFFFFFFFF) {
+    uint base_vertex_index = best_triangle_index * 3;
+    ivec4 vA = Vertexbuffer.vb[base_vertex_index + 0];
+    ivec4 vB = Vertexbuffer.vb[base_vertex_index + 1];
+    ivec4 vC = Vertexbuffer.vb[base_vertex_index + 2];
+
+    vec3 tuv = triIntersect(rayOrigin, rayDir, vec3(vA.x, vA.y, vA.z), vec3(vB.x, vB.y, vB.z), vec3(vC.x, vC.y, vC.z));
+    if (tuv.x >= 0 && tuv.x < lowestDepth) {
+        vec3 colorA = hslToRgb(vA.w & 0xffff);
+        vec3 colorB = hslToRgb(vB.w & 0xffff);
+        vec3 colorC = hslToRgb(vC.w & 0xffff);
+
+        vec3 barry = vec3(1.0 - tuv.y - tuv.z, tuv.y, tuv.z);
+        vec3 tri_color = barry.x * colorA + barry.y * colorB + barry.z * colorC;
+        c.rgb = mix(tri_color, c.rgb, c.a);
+        c.a = 1;
+    }
+    else {
+      c.rgba = vec4(1,0,1,1);
+    }
+  }
+  if (stack_pointer >= STACK_SIZE) {
+    c.rgba = vec4(1,0,0,1);
+  }
 
   FragColor = c;
 }

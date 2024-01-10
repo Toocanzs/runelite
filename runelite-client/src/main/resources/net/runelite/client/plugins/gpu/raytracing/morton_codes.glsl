@@ -72,7 +72,7 @@ void main() {
         ivec3 aabb_min = min(vA, min(vB, vC));
         ivec3 aabb_max = max(vA, max(vB, vC));
 
-        vec3 aabb_center = (aabb_min + aabb_max) / 2;
+        vec3 aabb_center = vec3(aabb_min + aabb_max) / 2.0;
 
         uint morton_code = get_morton_code(aabb_center);
         key_values[triangle_index] = KeyValue(triangle_index, morton_code);

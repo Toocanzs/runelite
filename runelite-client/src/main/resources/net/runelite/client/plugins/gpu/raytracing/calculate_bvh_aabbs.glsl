@@ -26,6 +26,7 @@ void main() {
                 uint left_child_index = nodes[current_node_index].left_child_index;
                 uint right_child_index = nodes[current_node_index].right_child_index;
 
+                // TODO: get rid of coherent and atomic exchange this part?
                 nodes[current_node_index].aabb_max = max(nodes[left_child_index].aabb_max, nodes[right_child_index].aabb_max);
                 nodes[current_node_index].aabb_min = min(nodes[left_child_index].aabb_min, nodes[right_child_index].aabb_min);
             }
