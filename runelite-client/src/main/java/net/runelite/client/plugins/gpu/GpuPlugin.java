@@ -1414,6 +1414,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					GL43C.glGetBufferSubData(GL43C.GL_SHADER_STORAGE_BUFFER, 0, bvhNodeInts);
 					int[] childrenAppearanceCount = new int[totalNumBVHNodes];
 					int[] parrentAppearanceCount = new int[totalNumBVHNodes];
+					int[] referencedTriangleCounts = new int[numTris];
 
 					StringBuilder b = new StringBuilder();
 					b.append("digraph G {\n");
@@ -1454,6 +1455,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 							b.append("\t").append(node_index).append("->").append(parent_index).append("[color=\"red\", style=\"dashed\"]//child->parent\n");
 							if (type.equals("leaf")) {
 								b.append(node_index).append("[color=\"green\"]\n");
+
+								referencedTriangleCounts[leaf_object_id_plus_one - 1]++;
 							}
 						}
 					} catch (Exception e) {
@@ -1468,6 +1471,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 					for (int i = 0; i < parrentAppearanceCount.length; i++) {
 						if (parrentAppearanceCount[i] > 2) {
 							System.out.println("Parent index " + i + " appears " + parrentAppearanceCount[i] + " times");
+						}
+					}
+
+					for (int i = 0; i < referencedTriangleCounts.length; i++) {
+						if (referencedTriangleCounts[i] != 1) {
+							System.out.println("referencedTriangleCounts is " + referencedTriangleCounts[i] + " for index ["  +i+ "]");
 						}
 					}
 					System.out.println("internal: " + numInternalNodes);

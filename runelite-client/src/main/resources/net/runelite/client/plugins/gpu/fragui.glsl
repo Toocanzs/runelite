@@ -83,37 +83,25 @@ vec3 triIntersect( in vec3 ro, in vec3 rd, in vec3 v0, in vec3 v1, in vec3 v2 )
     return vec3( t, u, v );
 }
 
-uint signBit(float f) {
-  uint negZero = 0x80000000;
-  uint signBit = negZero &  floatBitsToUint(f);
-  return signBit;
-}
-
 #define INFINITY uintBitsToFloat(0x7F800000)
 
-float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node, float best_triangle_distance) {
-  // https://tavianator.com/2022/ray_box_boundary.html
-  float tmin = 0;
-  float tmax = INFINITY;
-  for (int d = 0; d < 3; d++) {
-    bool sign = bool(signBit(invRayDir[d]));
-    ivec3 bminCorner = sign ? node.aabb_max : node.aabb_min;
-    ivec3 bmaxCorner = (!sign) ? node.aabb_max : node.aabb_min;
-    float bmin = bminCorner[d];
-    float bmax = bmaxCorner[d];
-
-    float dmin = (bmin - rayOrigin[d]) * invRayDir[d];
-    float dmax = (bmax - rayOrigin[d]) * invRayDir[d];
-
-    tmin = max(dmin, tmin);
-    tmax = min(dmax, tmax);
-  }
-  tmax = min(tmax, best_triangle_distance);
-  return tmin < tmax ? tmin : INFINITY;
+float min_component(vec3 v) {
+  return min(v.x, min(v.y, v.z));
 }
 
-float intersect(vec3 rayOrigin, vec3 invRayDir, BVHNode node) {
-  return intersect(rayOrigin, invRayDir, node, INFINITY);
+float max_component(vec3 v) {
+  return max(v.x, max(v.y, v.z));
+}
+
+float intersect(vec3 ray_origin, vec3 inverse_ray_dir, BVHNode node, float best_triangle_distance) {
+  vec3 t1 = (node.aabb_min - ray_origin) * inverse_ray_dir;
+  vec3 t2 = (node.aabb_max - ray_origin) * inverse_ray_dir;
+
+  float tmin = max_component(min(t1, t2));
+  float tmax = min_component(max(t1, t2));
+  tmax = min(tmax, best_triangle_distance);
+
+  return tmax >= tmin ? tmin : INFINITY;
 }
 
 void swap(inout float x, inout float y) {
@@ -128,36 +116,17 @@ void swap(inout uint x, inout uint y) {
   y = temp;
 }
 
-void main() {
-  vec4 c;
-
-  if (samplingMode == SAMPLING_CATROM || samplingMode == SAMPLING_MITCHELL) {
-    c = textureCubic(tex, TexCoord, samplingMode);
-  } else if (samplingMode == SAMPLING_XBR) {
-    c = textureXBR(tex, TexCoord, xbrTable, ceil(1.0 * targetDimensions.x / sourceDimensions.x));
-  } else {  // NEAREST or LINEAR, which uses GL_TEXTURE_MIN_FILTER/GL_TEXTURE_MAG_FILTER to affect sampling
-    c = texture(tex, TexCoord);
-  }
-
-  vec3 rayDir = normalize(vec3((-1. + 2. * TexCoord), 2));
-  rayDir.xy *= aspectScaling;
-  rayDir = (inverse(viewMatrix) * vec4(rayDir * vec3(1,-1,-1), 0)).xyz;
-  vec3 invRayDir = 1.0 / rayDir; // NOTE: The following code relies on divide by zero returning an infinity of the same sign as defined by IEEE 754
-  vec3 rayOrigin = cameraPosition;
-
-  float lowestDepth = uintBitsToFloat(0x7F800000); // positive infinity as uint float bytes
-  BVHNode root = bvh_nodes[0];
-
-  bool intersected_root = intersect(rayOrigin, invRayDir, root) != INFINITY;
-
+vec4 traverseBVH(vec3 ray_origin, vec3 ray_dir, vec3 inverse_ray_dir, out vec3 normal, out float t) { // TODO: name ray_dir/origin
   uint current_node_index = 0;
-  #define STACK_SIZE 64
+  #define STACK_SIZE 32
   uint stack[STACK_SIZE];
   uint stack_pointer = 0;
   float best_triangle_distance = INFINITY;
   uint best_triangle_index = 0xFFFFFFFF;
   uint aabb_hit_count = 0;
-  while (intersected_root && stack_pointer < STACK_SIZE) {
+  normal = vec3(0);
+  t = INFINITY;
+  while (stack_pointer < STACK_SIZE) {
     // Stack based traversal from https://jacco.ompf2.com/2022/04/18/how-to-build-a-bvh-part-2-faster-rays/
     if (bvh_nodes[current_node_index].leaf_object_id_plus_one != 0) {// leaf
       uint triangle_index = bvh_nodes[current_node_index].leaf_object_id_plus_one - 1;
@@ -167,51 +136,117 @@ void main() {
       ivec3 vC = Vertexbuffer.vb[base_vertex_index + 2].xyz;
 
       // TODO: use a hit test here without uvs
-      vec3 tuv = triIntersect(rayOrigin, rayDir, vec3(vA), vec3(vB), vec3(vC));
-      if (tuv.x >= 0) {
-        if (tuv.x < best_triangle_distance) {
+      float t;
+      vec3 tuv = triIntersect(ray_origin, ray_dir, vec3(vA), vec3(vB), vec3(vC));
+      if (tuv.x > 0.0 && tuv.x < best_triangle_distance) {
           best_triangle_distance = tuv.x;
           best_triangle_index = triangle_index;
-        }
       }
-      if (stack_pointer == 0) {
-        break;
-      } else {
-        current_node_index = stack[--stack_pointer];
-      }
+      if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
+      
       continue;
     }
     uint child1 = bvh_nodes[current_node_index].left_child_index;
     uint child2 = bvh_nodes[current_node_index].right_child_index;
 
-    float distance1 = intersect(rayOrigin, invRayDir, bvh_nodes[child1], best_triangle_distance);
-    float distance2 = intersect(rayOrigin, invRayDir, bvh_nodes[child2], best_triangle_distance);
+    float distance1 = intersect(ray_origin, inverse_ray_dir, bvh_nodes[child1], best_triangle_distance);
+    float distance2 = intersect(ray_origin, inverse_ray_dir, bvh_nodes[child2], best_triangle_distance);
 
     if (distance1 > distance2) {
       swap(distance1, distance2);
       swap(child1, child2);
     }
     if (distance1 == INFINITY) {
-      if (stack_pointer == 0) {
-        break;
-      } else {
-        current_node_index = stack[--stack_pointer];
-      }
+      if (stack_pointer == 0) break; else current_node_index = stack[--stack_pointer];
     } else {
+      aabb_hit_count++;
       current_node_index = child1;
       if (distance2 != INFINITY) { 
+        aabb_hit_count++;
         stack[stack_pointer++] = child2;
       }
     }
   }
 
-  //c.rgb = vec3(aabb_hit_count)/500;
-  /*for (int i = 0; i < vertexCount; i+=3) {
-    ivec4 vA = Vertexbuffer.vb[i + 0];
-    ivec4 vB = Vertexbuffer.vb[i + 1];
-    ivec4 vC = Vertexbuffer.vb[i + 2];
+  vec4 c = vec4(0);
+  if (best_triangle_index != 0xFFFFFFFF) {
+    uint base_vertex_index = best_triangle_index * 3;
+    ivec4 vA = Vertexbuffer.vb[base_vertex_index + 0];
+    ivec4 vB = Vertexbuffer.vb[base_vertex_index + 1];
+    ivec4 vC = Vertexbuffer.vb[base_vertex_index + 2];
 
-    vec3 tuv = triIntersect(rayOrigin, rayDir, vec3(vA.x, vA.y, vA.z), vec3(vB.x, vB.y, vB.z), vec3(vC.x, vC.y, vC.z));
+    vec3 tuv = triIntersect(ray_origin, ray_dir, vec3(vA.xyz), vec3(vB.xyz), vec3(vC.xyz));
+    if (tuv.x >= 0) {
+        vec3 colorA = hslToRgb(vA.w & 0xffff);
+        vec3 colorB = hslToRgb(vB.w & 0xffff);
+        vec3 colorC = hslToRgb(vC.w & 0xffff);
+
+        vec3 barry = vec3(1.0 - tuv.y - tuv.z, tuv.y, tuv.z);
+        vec3 tri_color = barry.x * colorA + barry.y * colorB + barry.z * colorC;
+        normal = normalize(cross(vec3(vB.xyz)-vec3(vA.xyz), vec3(vC.xyz)-vec3(vA.xyz)));
+        t = tuv.x;
+        return vec4(tri_color, 1);
+    }
+    else {
+      return vec4(1,0,1,1);
+    }
+  }
+  if (stack_pointer >= STACK_SIZE) {
+    return vec4(1,0,0,1);
+  }
+
+  return vec4(0);
+}
+
+void main() {
+
+  vec4 ray_color = vec4(0);
+  vec3 ray_dir = normalize(vec3((-1. + 2. * TexCoord), 2));
+  ray_dir.xy *= aspectScaling;
+  ray_dir = (inverse(viewMatrix) * vec4(ray_dir * vec3(1,-1,-1), 0)).xyz; // TODO: pass in inverse view matrix
+  vec3 inverse_ray_dir = 1.0 / ray_dir;
+  vec3 ray_origin = cameraPosition;
+
+  BVHNode root = bvh_nodes[0];
+
+  bool intersected_root = intersect(ray_origin, inverse_ray_dir, root, INFINITY) != INFINITY;
+  if (intersected_root) {
+    vec3 out_normal;
+    float t;
+    ray_color = traverseBVH(ray_origin, ray_dir, inverse_ray_dir, out_normal, t);
+    if (ray_color.a > 0) { 
+      //float reflected_t;
+      //vec4 reflected_color = traverseBVH(ray_origin + ray_dir * t + out_normal*1, reflect(ray_dir, out_normal), out_normal, reflected_t);
+      //c.rgb = mix(c.rgb, reflected_color.rgb, 0.1);
+      //c.rgb = abs(out_normal);
+    }
+  }
+
+  vec4 c;
+  if (samplingMode == SAMPLING_CATROM || samplingMode == SAMPLING_MITCHELL) {
+    c = textureCubic(tex, TexCoord, samplingMode);
+  } else if (samplingMode == SAMPLING_XBR) {
+    c = textureXBR(tex, TexCoord, xbrTable, ceil(1.0 * targetDimensions.x / sourceDimensions.x));
+  } else {  // NEAREST or LINEAR, which uses GL_TEXTURE_MIN_FILTER/GL_TEXTURE_MAG_FILTER to affect sampling
+    c = texture(tex, TexCoord);
+  }
+
+  c = alphaBlend(c, alphaOverlay);
+  c.rgb = colorblind(colorBlindMode, c.rgb);
+  if (ray_color.a > 0) {
+    c.rgb = mix(ray_color.rgb, c.rgb, c.a);
+    c.a = 1;
+  }
+  
+  /*float lowestDepth = INFINITY;
+  for (int i = 0; i < vertexCount/3; i++) {
+    BVHNode node = bvh_nodes[leaf_node_offset + i];
+    uint triangle_index = node.leaf_object_id_plus_one - 1;
+    ivec4 vA = Vertexbuffer.vb[triangle_index*3 + 0];
+    ivec4 vB = Vertexbuffer.vb[triangle_index*3 + 1];
+    ivec4 vC = Vertexbuffer.vb[triangle_index*3 + 2];
+
+    vec3 tuv = triIntersect(ray_origin, ray_dir, vec3(vA.x, vA.y, vA.z), vec3(vB.x, vB.y, vB.z), vec3(vC.x, vC.y, vC.z));
 
     if (tuv.x >= 0 && tuv.x < lowestDepth) {
         vec3 colorA = hslToRgb(vA.w & 0xffff);
@@ -224,34 +259,6 @@ void main() {
         lowestDepth = tuv.x;
     }
   }*/
-
-  c = alphaBlend(c, alphaOverlay);
-  c.rgb = colorblind(colorBlindMode, c.rgb);
-
-  if (best_triangle_index != 0xFFFFFFFF) {
-    uint base_vertex_index = best_triangle_index * 3;
-    ivec4 vA = Vertexbuffer.vb[base_vertex_index + 0];
-    ivec4 vB = Vertexbuffer.vb[base_vertex_index + 1];
-    ivec4 vC = Vertexbuffer.vb[base_vertex_index + 2];
-
-    vec3 tuv = triIntersect(rayOrigin, rayDir, vec3(vA.x, vA.y, vA.z), vec3(vB.x, vB.y, vB.z), vec3(vC.x, vC.y, vC.z));
-    if (tuv.x >= 0 && tuv.x < lowestDepth) {
-        vec3 colorA = hslToRgb(vA.w & 0xffff);
-        vec3 colorB = hslToRgb(vB.w & 0xffff);
-        vec3 colorC = hslToRgb(vC.w & 0xffff);
-
-        vec3 barry = vec3(1.0 - tuv.y - tuv.z, tuv.y, tuv.z);
-        vec3 tri_color = barry.x * colorA + barry.y * colorB + barry.z * colorC;
-        c.rgb = mix(tri_color, c.rgb, c.a);
-        c.a = 1;
-    }
-    else {
-      c.rgba = vec4(1,0,1,1);
-    }
-  }
-  if (stack_pointer >= STACK_SIZE) {
-    c.rgba = vec4(1,0,0,1);
-  }
 
   FragColor = c;
 }
