@@ -191,7 +191,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private final GLBuffer tmpVertexBuffer = new GLBuffer("tmp vertex buffer");
 	private final GLBuffer tmpUvBuffer = new GLBuffer("tmp tex buffer");
 	private final GLBuffer tmpModelBufferLarge = new GLBuffer("model buffer large");
-	private final GLBuffer tmpModelBufferSmall = new GLBuffer("model buffer small");
 	private final GLBuffer tmpModelBufferUnordered = new GLBuffer("model buffer unordered");
 	private final GLBuffer tmpOutBuffer = new GLBuffer("out vertex buffer");
 	private final GLBuffer tmpOutUvBuffer = new GLBuffer("out tex buffer");
@@ -205,15 +204,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private GpuFloatBuffer uvBuffer;
 
 	private GpuIntBuffer modelBufferUnordered;
-	private GpuIntBuffer modelBufferSmall;
 	private GpuIntBuffer modelBuffer;
 
 	private int unorderedModels;
-
-	/**
-	 * number of models in small buffer
-	 */
-	private int smallModels;
 
 	/**
 	 * number of models in large buffer
@@ -288,7 +281,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			{
 				fboSceneHandle = rboSceneHandle = -1; // AA FBO
 				targetBufferOffset = 0;
-				unorderedModels = smallModels = largeModels = 0;
+				unorderedModels = largeModels = 0;
 
 				AWTContext.loadNatives();
 
@@ -368,7 +361,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				uvBuffer = new GpuFloatBuffer();
 
 				modelBufferUnordered = new GpuIntBuffer();
-				modelBufferSmall = new GpuIntBuffer();
 				modelBuffer = new GpuIntBuffer();
 
 				setupSyncMode();
@@ -488,7 +480,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			vertexBuffer = null;
 			uvBuffer = null;
 
-			modelBufferSmall = null;
 			modelBuffer = null;
 			modelBufferUnordered = null;
 
@@ -733,7 +724,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		initGlBuffer(tmpVertexBuffer);
 		initGlBuffer(tmpUvBuffer);
 		initGlBuffer(tmpModelBufferLarge);
-		initGlBuffer(tmpModelBufferSmall);
 		initGlBuffer(tmpModelBufferUnordered);
 		initGlBuffer(tmpOutBuffer);
 		initGlBuffer(tmpOutUvBuffer);
@@ -752,7 +742,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		destroyGlBuffer(tmpVertexBuffer);
 		destroyGlBuffer(tmpUvBuffer);
 		destroyGlBuffer(tmpModelBufferLarge);
-		destroyGlBuffer(tmpModelBufferSmall);
 		destroyGlBuffer(tmpModelBufferUnordered);
 		destroyGlBuffer(tmpOutBuffer);
 		destroyGlBuffer(tmpOutUvBuffer);
@@ -929,13 +918,11 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		vertexBuffer.flip();
 		uvBuffer.flip();
 		modelBuffer.flip();
-		modelBufferSmall.flip();
 		modelBufferUnordered.flip();
 
 		IntBuffer vertexBuffer = this.vertexBuffer.getBuffer();
 		FloatBuffer uvBuffer = this.uvBuffer.getBuffer();
 		IntBuffer modelBuffer = this.modelBuffer.getBuffer();
-		IntBuffer modelBufferSmall = this.modelBufferSmall.getBuffer();
 		IntBuffer modelBufferUnordered = this.modelBufferUnordered.getBuffer();
 
 		// temp buffers
@@ -944,7 +931,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		// model buffers
 		updateBuffer(tmpModelBufferLarge, GL43C.GL_ARRAY_BUFFER, modelBuffer, GL43C.GL_DYNAMIC_DRAW, CL12.CL_MEM_READ_ONLY);
-		updateBuffer(tmpModelBufferSmall, GL43C.GL_ARRAY_BUFFER, modelBufferSmall, GL43C.GL_DYNAMIC_DRAW, CL12.CL_MEM_READ_ONLY);
 		updateBuffer(tmpModelBufferUnordered, GL43C.GL_ARRAY_BUFFER, modelBufferUnordered, GL43C.GL_DYNAMIC_DRAW, CL12.CL_MEM_READ_ONLY);
 
 		// Output buffers
@@ -967,10 +953,10 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			// GL43C.glFinish();
 
 			openCLManager.compute(
-				unorderedModels, smallModels, largeModels,
+				unorderedModels, largeModels,
 				sceneVertexBuffer, sceneUvBuffer,
 				tmpVertexBuffer, tmpUvBuffer,
-				tmpModelBufferUnordered, tmpModelBufferSmall, tmpModelBufferLarge,
+				tmpModelBufferUnordered, tmpModelBufferLarge,
 				tmpOutBuffer, tmpOutUvBuffer,
 				uniformBuffer);
 
@@ -999,19 +985,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
 
 		GL43C.glDispatchCompute(unorderedModels, 1, 1);
-
-		// small
-		GL43C.glUseProgram(glSmallComputeProgram);
-
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferSmall.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
-		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
-
-		GL43C.glDispatchCompute(smallModels, 1, 1);
 
 		// large
 		GL43C.glUseProgram(glComputeProgram);
@@ -1353,10 +1326,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		vertexBuffer.clear();
 		uvBuffer.clear();
 		modelBuffer.clear();
-		modelBufferSmall.clear();
 		modelBufferUnordered.clear();
 
-		smallModels = largeModels = unorderedModels = 0;
+		largeModels = unorderedModels = 0;
 		tempOffset = 0;
 		tempUvOffset = 0;
 
@@ -1770,7 +1742,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			int plane = (int) ((hash >> 49) & 3);
 			boolean hillskew = offsetModel != model;
 
-			GpuIntBuffer b = bufferForTriangles(tc);
+			GpuIntBuffer b = bufferForTriangles();
 
 			b.ensureCapacity(8);
 			IntBuffer buffer = b.getBuffer();
@@ -1804,7 +1776,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			int len = sceneUploader.pushModel(model, vertexBuffer, uvBuffer);
 
-			GpuIntBuffer b = bufferForTriangles(len / 3);
+			GpuIntBuffer b = bufferForTriangles();
 
 			b.ensureCapacity(8);
 			IntBuffer buffer = b.getBuffer();
@@ -1826,23 +1798,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	}
 
 	/**
-	 * returns the correct buffer based on triangle count and updates model count
-	 *
-	 * @param triangles
+	 * returns the buffer and updates model count
 	 * @return
 	 */
-	private GpuIntBuffer bufferForTriangles(int triangles)
+	private GpuIntBuffer bufferForTriangles()
 	{
-		if (triangles <= SMALL_TRIANGLE_COUNT)
-		{
-			++smallModels;
-			return modelBufferSmall;
-		}
-		else
-		{
-			++largeModels;
-			return modelBuffer;
-		}
+		++largeModels;
+		return modelBuffer;
 	}
 
 	private int getScaledValue(final double scale, final int value)

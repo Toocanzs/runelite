@@ -457,13 +457,12 @@ class OpenCLManager
 		MemoryUtil.memFree(tileBuffer);
 	}
 
-	void compute(int unorderedModels, int smallModels, int largeModels,
+	void compute(int unorderedModels, int largeModels,
 		GLBuffer sceneVertexBuffer,
 		GLBuffer sceneUvBuffer,
 		GLBuffer vertexBuffer,
 		GLBuffer uvBuffer,
 		GLBuffer unorderedBuffer,
-		GLBuffer smallBuffer,
 		GLBuffer largeBuffer,
 		GLBuffer outVertexBuffer,
 		GLBuffer outUvBuffer,
@@ -472,11 +471,11 @@ class OpenCLManager
 	{
 		try (MemoryStack stack = MemoryStack.stackPush())
 		{
-			PointerBuffer glBuffers = stack.mallocPointer(10);
+			PointerBuffer glBuffers = stack.mallocPointer(9);
 			glBuffers.put(sceneVertexBuffer.clBuffer);
 			glBuffers.put(sceneUvBuffer.clBuffer);
 			glBuffers.put(unorderedBuffer.clBuffer);
-			glBuffers.put(smallBuffer.clBuffer);
+			//glBuffers.put(smallBuffer.clBuffer); // TODO: Is this going to break pointers in opencl?
 			glBuffers.put(largeBuffer.clBuffer);
 			glBuffers.put(vertexBuffer.clBuffer);
 			glBuffers.put(uvBuffer.clBuffer);
@@ -502,25 +501,6 @@ class OpenCLManager
 				// queue compute call after acquireGLBuffers
 				CL12.clEnqueueNDRangeKernel(commandQueue, kernelUnordered, 1, null,
 					stack.pointers(unorderedModels * 6L), stack.pointers(6),
-					acquireEvent, computeEvents);
-				computeEvents.position(computeEvents.position() + 1);
-			}
-
-			if (smallModels > 0)
-			{
-				CL12.clSetKernelArg(kernelSmall, 0, (SHARED_SIZE + SMALL_SIZE) * Integer.BYTES);
-				CL12.clSetKernelArg1p(kernelSmall, 1, smallBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 2, sceneVertexBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 3, vertexBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 4, sceneUvBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 5, uvBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 6, outVertexBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 7, outUvBuffer.clBuffer);
-				CL12.clSetKernelArg1p(kernelSmall, 8, uniformBuffer.clBuffer);
-				CL12.clSetKernelArg1l(kernelSmall, 9, tileHeightImage);
-
-				CL12.clEnqueueNDRangeKernel(commandQueue, kernelSmall, 1, null,
-					stack.pointers(smallModels * (SMALL_SIZE / smallFaceCount)), stack.pointers(SMALL_SIZE / smallFaceCount),
 					acquireEvent, computeEvents);
 				computeEvents.position(computeEvents.position() + 1);
 			}
