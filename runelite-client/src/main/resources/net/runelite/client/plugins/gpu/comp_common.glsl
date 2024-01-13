@@ -50,29 +50,29 @@ struct modelinfo {
 };
 
 layout(std430, binding = 0) readonly buffer modelbuffer_in {
-  modelinfo ol[];
+  modelinfo modelInfos[];
 };
 
 layout(std430, binding = 1) readonly buffer vertexbuffer_in {
-  ivec4 vb[];
+  ivec4 vertexBuffer[];
 };
 
 layout(std430, binding = 2) readonly buffer tempvertexbuffer_in {
-  ivec4 tempvb[];
+  ivec4 tempVertexBuffer[];
 };
 
 layout(std430, binding = 3) writeonly buffer vertex_out {
-  ivec4 vout[];
+  ivec4 vertexOutBuffer[];
 };
 
 layout(std430, binding = 4) writeonly buffer uv_out {
-  vec4 uvout[];
+  vec4 uvOutBuffer[];
 };
 
 layout(std430, binding = 5) readonly buffer texturebuffer_in {
-  vec4 texb[];
+  vec4 textureBuffer[];
 };
 
 layout(std430, binding = 6) readonly buffer temptexturebuffer_in {
-  vec4 temptexb[];
+  vec4 tempTextureBuffer[];
 };

@@ -45,7 +45,7 @@ layout(local_size_x = THREAD_COUNT) in;
 void main() {
   uint groupId = gl_WorkGroupID.x;
   uint localId = gl_LocalInvocationID.x * FACES_PER_THREAD;
-  modelinfo minfo = ol[groupId];
+  modelinfo minfo = modelInfos[groupId];
   ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
 
   if (localId == 0) {

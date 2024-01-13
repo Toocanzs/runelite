@@ -109,13 +109,13 @@ void get_face(uint localId, modelinfo minfo, float cameraYaw, float cameraPitch,
 
   // Grab triangle vertices from the correct buffer
   if (flags < 0) {
-    thisA = vb[offset + ssboOffset * 3];
-    thisB = vb[offset + ssboOffset * 3 + 1];
-    thisC = vb[offset + ssboOffset * 3 + 2];
+    thisA = vertexBuffer[offset + ssboOffset * 3];
+    thisB = vertexBuffer[offset + ssboOffset * 3 + 1];
+    thisC = vertexBuffer[offset + ssboOffset * 3 + 2];
   } else {
-    thisA = tempvb[offset + ssboOffset * 3];
-    thisB = tempvb[offset + ssboOffset * 3 + 1];
-    thisC = tempvb[offset + ssboOffset * 3 + 2];
+    thisA = tempVertexBuffer[offset + ssboOffset * 3];
+    thisB = tempVertexBuffer[offset + ssboOffset * 3 + 1];
+    thisC = tempVertexBuffer[offset + ssboOffset * 3 + 2];
   }
 
   if (localId < size) {
@@ -263,31 +263,31 @@ void sort_and_insert(uint localId, modelinfo minfo, int thisPriority, int thisDi
     thisrvC = hillskew_vertex(thisrvC, hillskew, minfo.y, plane);
 
     // write to out buffer
-    vout[outOffset + myOffset * 3] = thisrvA;
-    vout[outOffset + myOffset * 3 + 1] = thisrvB;
-    vout[outOffset + myOffset * 3 + 2] = thisrvC;
+    vertexOutBuffer[outOffset + myOffset * 3] = thisrvA;
+    vertexOutBuffer[outOffset + myOffset * 3 + 1] = thisrvB;
+    vertexOutBuffer[outOffset + myOffset * 3 + 2] = thisrvC;
 
     if (toffset < 0) {
-      uvout[outOffset + myOffset * 3] = vec4(0);
-      uvout[outOffset + myOffset * 3 + 1] = vec4(0);
-      uvout[outOffset + myOffset * 3 + 2] = vec4(0);
+      uvOutBuffer[outOffset + myOffset * 3] = vec4(0);
+      uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(0);
+      uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(0);
     } else {
       vec4 texA, texB, texC;
 
       if (flags >= 0) {
-        texA = temptexb[toffset + localId * 3];
-        texB = temptexb[toffset + localId * 3 + 1];
-        texC = temptexb[toffset + localId * 3 + 2];
+        texA = tempTextureBuffer[toffset + localId * 3];
+        texB = tempTextureBuffer[toffset + localId * 3 + 1];
+        texC = tempTextureBuffer[toffset + localId * 3 + 2];
       } else {
-        texA = texb[toffset + localId * 3];
-        texB = texb[toffset + localId * 3 + 1];
-        texC = texb[toffset + localId * 3 + 2];
+        texA = textureBuffer[toffset + localId * 3];
+        texB = textureBuffer[toffset + localId * 3 + 1];
+        texC = textureBuffer[toffset + localId * 3 + 2];
       }
 
       int orientation = flags & 0x7ff;
-      uvout[outOffset + myOffset * 3] = vec4(texA.x, rotatef(texA.yzw, orientation) + pos.xyz);
-      uvout[outOffset + myOffset * 3 + 1] = vec4(texB.x, rotatef(texB.yzw, orientation) + pos.xyz);
-      uvout[outOffset + myOffset * 3 + 2] = vec4(texC.x, rotatef(texC.yzw, orientation) + pos.xyz);
+      uvOutBuffer[outOffset + myOffset * 3] = vec4(texA.x, rotatef(texA.yzw, orientation) + pos.xyz);
+      uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(texB.x, rotatef(texB.yzw, orientation) + pos.xyz);
+      uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(texC.x, rotatef(texC.yzw, orientation) + pos.xyz);
     }
   }
 }
