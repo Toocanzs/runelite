@@ -39,14 +39,15 @@ layout(std140) uniform uniforms {
 };
 
 struct modelinfo {
-  int offset;   // offset into vertex buffer
-  int toffset;  // offset into texture buffer
-  int size;     // length in faces
-  int idx;      // write idx in target buffer
-  int flags;    // buffer, hillskew, plane, orientation
-  int x;        // scene position x
-  int y;        // scene position y
-  int z;        // scene position z
+  int offset;              // offset into vertex buffer
+  int toffset;             // offset into texture buffer
+  int size;                // length in faces
+  int idx;                 // write idx in target buffer
+  int flags;               // buffer, hillskew, plane, orientation
+  int modelCountPrefixSum; // exclusive prefix sum of model counts for finding model associated with a particular triangle quickly
+  int x;                   // scene position x
+  int y;                   // scene position y
+  int z;                   // scene position z
 };
 
 layout(std430, binding = 0) readonly buffer modelbuffer_in {

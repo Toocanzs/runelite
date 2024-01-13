@@ -24,62 +24,85 @@
  */
 
 #include version_header
-
+#include thread_config
 #include "comp_common.glsl"
 
 uniform int unorderedModelCount;
 
-layout(local_size_x = 6) in;
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = LOCAL_SIZE_Z) in;
+
+int binary_search_for_model_index(int modelCount, int triangleIndex) {
+  int low = 0;
+  int high = modelCount - 1;
+  while (low <= high) {
+    int mid = low + (high - low) / 2;
+
+    modelinfo info = modelInfos[mid];
+    int triangleStartIndex = info.modelCountPrefixSum;
+    int triangleEndIndex = info.modelCountPrefixSum + info.size;
+
+    if (triangleIndex >= triangleStartIndex && triangleIndex < triangleEndIndex) {
+      return mid;
+    }
+    else if (triangleIndex >= triangleEndIndex) {
+      low = mid + 1;
+    }
+    else {
+      high = mid - 1;
+    }
+  }
+  return -1;
+}
 
 void main() {
-  uint groupId = gl_WorkGroupID.x;
-  uint localId = gl_LocalInvocationID.x;
-  modelinfo minfo = modelInfos[groupId];
+  uint globalTriangleIndex = gl_GlobalInvocationID.x;
+  int modelIndex = binary_search_for_model_index(unorderedModelCount, int(globalTriangleIndex));
+  // Out of bounds invocations will get a -1 model index and return early
+  if (modelIndex != -1) {
+    modelinfo minfo = modelInfos[modelIndex];
 
-  int offset = minfo.offset;
-  int size = minfo.size;
-  int outOffset = minfo.idx;
-  int toffset = minfo.toffset;
-  int flags = minfo.flags;
+    int offset = minfo.offset;
+    int size = minfo.size;
+    int outOffset = minfo.idx;
+    int toffset = minfo.toffset;
+    int flags = minfo.flags;
+    uint modelTriangleIndex = globalTriangleIndex - minfo.modelCountPrefixSum;
 
-  if (localId >= size) {
-    return;
-  }
+    uint ssboOffset = modelTriangleIndex;
+    ivec4 thisA, thisB, thisC;
 
-  uint ssboOffset = localId;
-  ivec4 thisA, thisB, thisC;
+    // Grab triangle vertices from the correct buffer
+    if (flags < 0) {
+      thisA = vertexBuffer[offset + ssboOffset * 3];
+      thisB = vertexBuffer[offset + ssboOffset * 3 + 1];
+      thisC = vertexBuffer[offset + ssboOffset * 3 + 2];
+    } else {
+      thisA = tempVertexBuffer[offset + ssboOffset * 3];
+      thisB = tempVertexBuffer[offset + ssboOffset * 3 + 1];
+      thisC = tempVertexBuffer[offset + ssboOffset * 3 + 2];
+    }
 
-  // Grab triangle vertices from the correct buffer
-  if (flags < 0) {
-    thisA = vertexBuffer[offset + ssboOffset * 3];
-    thisB = vertexBuffer[offset + ssboOffset * 3 + 1];
-    thisC = vertexBuffer[offset + ssboOffset * 3 + 2];
-  } else {
-    thisA = tempVertexBuffer[offset + ssboOffset * 3];
-    thisB = tempVertexBuffer[offset + ssboOffset * 3 + 1];
-    thisC = tempVertexBuffer[offset + ssboOffset * 3 + 2];
-  }
+    uint myOffset = modelTriangleIndex;
+    ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
+    ivec4 texPos = pos.wxyz;
 
-  uint myOffset = localId;
-  ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
-  ivec4 texPos = pos.wxyz;
+    // position vertices in scene and write to out buffer
+    vertexOutBuffer[outOffset + myOffset * 3] = pos + thisA;
+    vertexOutBuffer[outOffset + myOffset * 3 + 1] = pos + thisB;
+    vertexOutBuffer[outOffset + myOffset * 3 + 2] = pos + thisC;
 
-  // position vertices in scene and write to out buffer
-  vertexOutBuffer[outOffset + myOffset * 3] = pos + thisA;
-  vertexOutBuffer[outOffset + myOffset * 3 + 1] = pos + thisB;
-  vertexOutBuffer[outOffset + myOffset * 3 + 2] = pos + thisC;
-
-  if (toffset < 0) {
-    uvOutBuffer[outOffset + myOffset * 3] = vec4(0);
-    uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(0);
-    uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(0);
-  } else if (flags >= 0) {
-    uvOutBuffer[outOffset + myOffset * 3] = texPos + tempTextureBuffer[toffset + localId * 3];
-    uvOutBuffer[outOffset + myOffset * 3 + 1] = texPos + tempTextureBuffer[toffset + localId * 3 + 1];
-    uvOutBuffer[outOffset + myOffset * 3 + 2] = texPos + tempTextureBuffer[toffset + localId * 3 + 2];
-  } else {
-    uvOutBuffer[outOffset + myOffset * 3] = texPos + textureBuffer[toffset + localId * 3];
-    uvOutBuffer[outOffset + myOffset * 3 + 1] = texPos + textureBuffer[toffset + localId * 3 + 1];
-    uvOutBuffer[outOffset + myOffset * 3 + 2] = texPos + textureBuffer[toffset + localId * 3 + 2];
+    if (toffset < 0) {
+      uvOutBuffer[outOffset + myOffset * 3] = vec4(0);
+      uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(0);
+      uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(0);
+    } else if (flags >= 0) {
+      uvOutBuffer[outOffset + myOffset * 3] = texPos + tempTextureBuffer[toffset + modelTriangleIndex * 3];
+      uvOutBuffer[outOffset + myOffset * 3 + 1] = texPos + tempTextureBuffer[toffset + modelTriangleIndex * 3 + 1];
+      uvOutBuffer[outOffset + myOffset * 3 + 2] = texPos + tempTextureBuffer[toffset + modelTriangleIndex * 3 + 2];
+    } else {
+      uvOutBuffer[outOffset + myOffset * 3] = texPos + textureBuffer[toffset + modelTriangleIndex * 3];
+      uvOutBuffer[outOffset + myOffset * 3 + 1] = texPos + textureBuffer[toffset + modelTriangleIndex * 3 + 1];
+      uvOutBuffer[outOffset + myOffset * 3 + 2] = texPos + textureBuffer[toffset + modelTriangleIndex * 3 + 2];
+    }
   }
 }

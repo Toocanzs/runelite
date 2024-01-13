@@ -158,15 +158,14 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	static final Shader COMPUTE_PROGRAM = new Shader()
 		.add(GL43C.GL_COMPUTE_SHADER, "comp.glsl");
 
-	static final Shader SMALL_COMPUTE_PROGRAM = new Shader()
-		.add(GL43C.GL_COMPUTE_SHADER, "comp.glsl");
-
 	static final Shader UNORDERED_COMPUTE_PROGRAM = new Shader()
 		.add(GL43C.GL_COMPUTE_SHADER, "comp_unordered.glsl");
 
 	static final Shader UI_PROGRAM = new Shader()
 		.add(GL43C.GL_VERTEX_SHADER, "vertui.glsl")
 		.add(GL43C.GL_FRAGMENT_SHADER, "fragui.glsl");
+
+	static final int unorderedComputeGroupSize = 1024;
 
 	private int glProgram;
 	private int glComputeProgram;
@@ -205,13 +204,14 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private GpuIntBuffer modelBufferUnordered;
 	private GpuIntBuffer modelBuffer;
 
-	private int unorderedModels;
+	private int unorderedModelCount;
+	private int orderedModelTriangleCount;
 	private int unorderedModelTriangleCount;
 
 	/**
 	 * number of models in large buffer
 	 */
-	private int largeModels;
+	private int orderedModelCount;
 
 	/**
 	 * offset in the target buffer for model
@@ -282,7 +282,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			{
 				fboSceneHandle = rboSceneHandle = -1; // AA FBO
 				targetBufferOffset = 0;
-				unorderedModels = unorderedModelTriangleCount = largeModels = 0;
+				unorderedModelCount = unorderedModelTriangleCount = orderedModelCount = 0;
 
 				AWTContext.loadNatives();
 
@@ -578,6 +578,28 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		return template;
 	}
 
+	private Template createDispatchTemplate(int workGroupSizeX, int workGroupSizeY, int workGroupSizeZ)
+	{
+		String versionHeader = OSType.getOSType() == OSType.Linux ? LINUX_VERSION_HEADER : WINDOWS_VERSION_HEADER;
+		Template template = new Template();
+		template.add(key ->
+		{
+			if ("version_header".equals(key))
+			{
+				return versionHeader;
+			}
+			if ("thread_config".equals(key))
+			{
+				return "#define LOCAL_SIZE_X " + workGroupSizeX + "\n" +
+						"#define LOCAL_SIZE_Y " + workGroupSizeY + "\n" +
+						"#define LOCAL_SIZE_Z " + workGroupSizeZ + "\n";
+			}
+			return null;
+		});
+		template.addInclude(GpuPlugin.class);
+		return template;
+	}
+
 	private void initProgram() throws ShaderException
 	{
 		Template template = createTemplate(-1, -1);
@@ -587,7 +609,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		if (computeMode == ComputeMode.OPENGL)
 		{
 			glComputeProgram = COMPUTE_PROGRAM.compile(createTemplate(1024, 6));
-			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
+			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(createDispatchTemplate(unorderedComputeGroupSize, 1, 1));
 		}
 		else if (computeMode == ComputeMode.OPENCL)
 		{
@@ -955,7 +977,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			// GL43C.glFinish();
 
 			openCLManager.compute(
-				unorderedModels, largeModels,
+					unorderedModelCount, orderedModelCount,
 				sceneVertexBuffer, sceneUvBuffer,
 				tmpVertexBuffer, tmpUvBuffer,
 				tmpModelBufferUnordered, tmpModelBufferLarge,
@@ -970,7 +992,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		// unordered
 		GL43C.glUseProgram(glUnorderedComputeProgram);
-		GL43C.glUniform1i(uniUnorderedModelCount, unorderedModels);
+		GL43C.glUniform1i(uniUnorderedModelCount, unorderedModelCount);
 
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferUnordered.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
@@ -980,11 +1002,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
 
-		GL43C.glDispatchCompute(unorderedModels, 1, 1);
+		int unorderedGroupCount = (unorderedModelTriangleCount + unorderedComputeGroupSize - 1) / unorderedComputeGroupSize;
+		GL43C.glDispatchCompute(unorderedGroupCount, 1, 1);
 
 		// large
 		GL43C.glUseProgram(glComputeProgram);
-		GL43C.glUniform1i(uniOrderedModelCount, largeModels);
+		GL43C.glUniform1i(uniOrderedModelCount, orderedModelCount);
 
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
@@ -994,7 +1017,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
 
-		GL43C.glDispatchCompute(largeModels, 1, 1);
+		GL43C.glDispatchCompute(orderedModelCount, 1, 1);
 
 		checkGLErrors();
 	}
@@ -1021,18 +1044,19 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			final int localZ = tileY << Perspective.LOCAL_COORD_BITS;
 
 			GpuIntBuffer b = modelBufferUnordered;
-			++unorderedModels;
-			unorderedModelTriangleCount += 2;
+			++unorderedModelCount;
 
-			b.ensureCapacity(8);
+			b.ensureCapacity(9);
 			IntBuffer buffer = b.getBuffer();
 			buffer.put(paint.getBufferOffset());
 			buffer.put(paint.getUvBufferOffset());
 			buffer.put(2);
 			buffer.put(targetBufferOffset);
 			buffer.put(FLAG_SCENE_BUFFER);
+			buffer.put(unorderedModelTriangleCount);
 			buffer.put(localX).put(localY).put(localZ);
 
+			unorderedModelTriangleCount += 2;
 			targetBufferOffset += 2 * 3;
 		}
 	}
@@ -1056,18 +1080,19 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			final int localZ = tileY << Perspective.LOCAL_COORD_BITS;
 
 			GpuIntBuffer b = modelBufferUnordered;
-			++unorderedModels;
-			unorderedModelTriangleCount += model.getBufferLen() / 3;
+			++unorderedModelCount;
 
-			b.ensureCapacity(8);
+			b.ensureCapacity(9);
 			IntBuffer buffer = b.getBuffer();
 			buffer.put(model.getBufferOffset());
 			buffer.put(model.getUvBufferOffset());
 			buffer.put(model.getBufferLen() / 3);
 			buffer.put(targetBufferOffset);
 			buffer.put(FLAG_SCENE_BUFFER);
+			buffer.put(unorderedModelTriangleCount);
 			buffer.put(localX).put(localY).put(localZ);
 
+			unorderedModelTriangleCount += model.getBufferLen() / 3;
 			targetBufferOffset += model.getBufferLen();
 		}
 	}
@@ -1327,7 +1352,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		modelBuffer.clear();
 		modelBufferUnordered.clear();
 
-		largeModels = unorderedModels = unorderedModelTriangleCount = 0;
+		orderedModelCount = unorderedModelCount = unorderedModelTriangleCount = 0;
 		tempOffset = 0;
 		tempUvOffset = 0;
 
@@ -1743,15 +1768,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			GpuIntBuffer b = bufferForTriangles();
 
-			b.ensureCapacity(8);
+			b.ensureCapacity(9);
 			IntBuffer buffer = b.getBuffer();
 			buffer.put(offsetModel.getBufferOffset());
 			buffer.put(uvOffset);
 			buffer.put(tc);
 			buffer.put(targetBufferOffset);
 			buffer.put(FLAG_SCENE_BUFFER | (hillskew ? (1 << 26) : 0) | (plane << 24) | orientation);
+			buffer.put(orderedModelTriangleCount);
 			buffer.put(x + client.getCameraX2()).put(y + client.getCameraY2()).put(z + client.getCameraZ2());
-
+			orderedModelTriangleCount += tc;
 			targetBufferOffset += tc * 3;
 		}
 		else
@@ -1777,15 +1803,17 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			GpuIntBuffer b = bufferForTriangles();
 
-			b.ensureCapacity(8);
+			b.ensureCapacity(9);
 			IntBuffer buffer = b.getBuffer();
 			buffer.put(tempOffset);
 			buffer.put(hasUv ? tempUvOffset : -1);
 			buffer.put(len / 3);
 			buffer.put(targetBufferOffset);
 			buffer.put(orientation);
+			buffer.put(orderedModelTriangleCount);
 			buffer.put(x + client.getCameraX2()).put(y + client.getCameraY2()).put(z + client.getCameraZ2());
 
+			orderedModelTriangleCount += len/3;
 			tempOffset += len;
 			if (hasUv)
 			{
@@ -1802,7 +1830,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	 */
 	private GpuIntBuffer bufferForTriangles()
 	{
-		++largeModels;
+		++orderedModelCount;
 		return modelBuffer;
 	}
 
