@@ -170,7 +170,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 	private int glProgram;
 	private int glComputeProgram;
-	private int glSmallComputeProgram;
 	private int glUnorderedComputeProgram;
 	private int glUiProgram;
 
@@ -207,6 +206,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private GpuIntBuffer modelBuffer;
 
 	private int unorderedModels;
+	private int unorderedModelTriangleCount;
 
 	/**
 	 * number of models in large buffer
@@ -258,12 +258,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniUiAlphaOverlay;
 	private int uniTextures;
 	private int uniTextureAnimations;
-	private int uniBlockSmall;
 	private int uniBlockLarge;
 	private int uniBlockMain;
 	private int uniSmoothBanding;
 	private int uniTextureLightMode;
 	private int uniTick;
+	private int uniUnorderedModelCount;
+	private int uniOrderedModelCount;
 
 	private boolean lwjglInitted = false;
 
@@ -281,7 +282,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			{
 				fboSceneHandle = rboSceneHandle = -1; // AA FBO
 				targetBufferOffset = 0;
-				unorderedModels = largeModels = 0;
+				unorderedModels = unorderedModelTriangleCount = largeModels = 0;
 
 				AWTContext.loadNatives();
 
@@ -586,7 +587,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		if (computeMode == ComputeMode.OPENGL)
 		{
 			glComputeProgram = COMPUTE_PROGRAM.compile(createTemplate(1024, 6));
-			glSmallComputeProgram = SMALL_COMPUTE_PROGRAM.compile(createTemplate(512, 1));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(template);
 		}
 		else if (computeMode == ComputeMode.OPENCL)
@@ -623,8 +623,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		if (computeMode == ComputeMode.OPENGL)
 		{
-			uniBlockSmall = GL43C.glGetUniformBlockIndex(glSmallComputeProgram, "uniforms");
 			uniBlockLarge = GL43C.glGetUniformBlockIndex(glComputeProgram, "uniforms");
+
+			// The uniform block is updated before anything is drawn so model counts would be zero
+			// So instead of adding new fields to the uniform block and trying to update just those bytes later,
+			// We just use normal uniforms and update them when we know the counts
+			uniUnorderedModelCount = GL43C.glGetUniformLocation(glUnorderedComputeProgram, "unorderedModelCount");
+			uniOrderedModelCount = GL43C.glGetUniformLocation(glComputeProgram, "orderedModelCount");
 		}
 	}
 
@@ -635,9 +640,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		GL43C.glDeleteProgram(glComputeProgram);
 		glComputeProgram = -1;
-
-		GL43C.glDeleteProgram(glSmallComputeProgram);
-		glSmallComputeProgram = -1;
 
 		GL43C.glDeleteProgram(glUnorderedComputeProgram);
 		glUnorderedComputeProgram = -1;
@@ -963,18 +965,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			checkGLErrors();
 			return;
 		}
-
-		/*
-		 * Compute is split into three separate programs: 'unordered', 'small', and 'large'
-		 * to save on GPU resources. Small will sort <= 512 faces, large will do <= 6144.
-		 */
-
 		// Bind UBO to compute programs
-		GL43C.glUniformBlockBinding(glSmallComputeProgram, uniBlockSmall, 0);
 		GL43C.glUniformBlockBinding(glComputeProgram, uniBlockLarge, 0);
 
 		// unordered
 		GL43C.glUseProgram(glUnorderedComputeProgram);
+		GL43C.glUniform1i(uniUnorderedModelCount, unorderedModels);
 
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferUnordered.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
@@ -988,6 +984,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		// large
 		GL43C.glUseProgram(glComputeProgram);
+		GL43C.glUniform1i(uniOrderedModelCount, largeModels);
 
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
@@ -1025,6 +1022,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			GpuIntBuffer b = modelBufferUnordered;
 			++unorderedModels;
+			unorderedModelTriangleCount += 2;
 
 			b.ensureCapacity(8);
 			IntBuffer buffer = b.getBuffer();
@@ -1059,6 +1057,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			GpuIntBuffer b = modelBufferUnordered;
 			++unorderedModels;
+			unorderedModelTriangleCount += model.getBufferLen() / 3;
 
 			b.ensureCapacity(8);
 			IntBuffer buffer = b.getBuffer();
@@ -1328,7 +1327,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		modelBuffer.clear();
 		modelBufferUnordered.clear();
 
-		largeModels = unorderedModels = 0;
+		largeModels = unorderedModels = unorderedModelTriangleCount = 0;
 		tempOffset = 0;
 		tempUvOffset = 0;
 

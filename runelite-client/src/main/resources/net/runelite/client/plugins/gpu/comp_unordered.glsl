@@ -27,6 +27,8 @@
 
 #include "comp_common.glsl"
 
+uniform int unorderedModelCount;
+
 layout(local_size_x = 6) in;
 
 void main() {

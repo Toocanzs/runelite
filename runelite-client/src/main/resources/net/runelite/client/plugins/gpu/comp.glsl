@@ -36,6 +36,7 @@ shared int min10;                                        // minimum distance to 
 shared int renderPris[THREAD_COUNT * FACES_PER_THREAD];  // priority for face draw order
 
 #include "comp_common.glsl"
+uniform int orderedModelCount;
 
 layout(local_size_x = THREAD_COUNT) in;
 
