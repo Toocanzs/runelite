@@ -81,12 +81,12 @@ int priority_map(int p, int distance, int _min10, int avg1, int avg2, int avg3) 
 
 // calculate the number of faces with a lower adjusted priority than
 // the given adjusted priority
-int count_prio_offset(int priority) {
+int count_prio_offset(int priority, uint modelIndex) {
   // this shouldn't ever be outside of (0, 17) because it is the return value from priority_map
   priority = clamp(priority, 0, 17);
   int total = 0;
   for (int i = 0; i < priority; i++) {
-    total += totalMappedNum[i];
+    total += priorityData[modelIndex].totalMappedNum[i];
   }
   return total;
 }
@@ -97,11 +97,7 @@ void get_face(uint localId, modelinfo minfo, float cameraYaw, float cameraPitch,
   int flags = minfo.flags;
   uint ssboOffset;
 
-  if (localId < size) {
-    ssboOffset = localId;
-  } else {
-    ssboOffset = 0;
-  }
+  ssboOffset = localId;
 
   ivec4 thisA;
   ivec4 thisB;
@@ -118,92 +114,76 @@ void get_face(uint localId, modelinfo minfo, float cameraYaw, float cameraPitch,
     thisC = tempVertexBuffer[offset + ssboOffset * 3 + 2];
   }
 
-  if (localId < size) {
-    int orientation = flags & 0x7ff;
+  int orientation = flags & 0x7ff;
 
-    // rotate for model orientation
-    ivec4 thisrvA = rotate(thisA, orientation);
-    ivec4 thisrvB = rotate(thisB, orientation);
-    ivec4 thisrvC = rotate(thisC, orientation);
+  // rotate for model orientation
+  ivec4 thisrvA = rotate(thisA, orientation);
+  ivec4 thisrvB = rotate(thisB, orientation);
+  ivec4 thisrvC = rotate(thisC, orientation);
 
-    // calculate distance to face
-    int thisPriority = (thisA.w >> 16) & 0xff;  // all vertices on the face have the same priority
-    int thisDistance = face_distance(thisrvA, thisrvB, thisrvC, cameraYaw, cameraPitch);
+  // calculate distance to face
+  int thisPriority = (thisA.w >> 16) & 0xff;  // all vertices on the face have the same priority
+  int thisDistance = face_distance(thisrvA, thisrvB, thisrvC, cameraYaw, cameraPitch);
 
-    o1 = thisrvA;
-    o2 = thisrvB;
-    o3 = thisrvC;
+  o1 = thisrvA;
+  o2 = thisrvB;
+  o3 = thisrvC;
 
-    prio = thisPriority;
-    dis = thisDistance;
-  } else {
-    o1 = ivec4(0);
-    o2 = ivec4(0);
-    o3 = ivec4(0);
-    prio = 0;
-    dis = 0;
-  }
+  prio = thisPriority;
+  dis = thisDistance;
 }
 
-void add_face_prio_distance(uint localId, modelinfo minfo, ivec4 thisrvA, ivec4 thisrvB, ivec4 thisrvC, int thisPriority, int thisDistance, ivec4 pos) {
-  if (localId < minfo.size) {
-    // if the face is not culled, it is calculated into priority distance averages
-    if (face_visible(thisrvA, thisrvB, thisrvC, pos)) {
-      atomicAdd(totalNum[thisPriority], 1);
-      atomicAdd(totalDistance[thisPriority], thisDistance);
+void add_face_prio_distance(uint localId, uint modelIndex, modelinfo minfo, ivec4 thisrvA, ivec4 thisrvB, ivec4 thisrvC, int thisPriority, int thisDistance, ivec4 pos) {
+   // TODO: REMOVE modelinfo
+  // if the face is not culled, it is calculated into priority distance averages
+  if (face_visible(thisrvA, thisrvB, thisrvC, pos)) {
+    atomicAdd(priorityData[modelIndex].totalNum[thisPriority], 1);
+    atomicAdd(priorityData[modelIndex].totalDistance[thisPriority], thisDistance);
 
-      // calculate minimum distance to any face of priority 10 for positioning the 11 faces later
-      if (thisPriority == 10) {
-        atomicMin(min10, thisDistance);
-      }
+    // calculate minimum distance to any face of priority 10 for positioning the 11 faces later
+    if (thisPriority == 10) {
+      atomicMin(priorityData[modelIndex].min10, thisDistance);
     }
   }
 }
 
-int map_face_priority(uint localId, modelinfo minfo, int thisPriority, int thisDistance, out int prio) {
-  int size = minfo.size;
+int map_face_priority(uint localId, uint modelIndex, modelinfo minfo, int thisPriority, int thisDistance, out int prio) {
+  int size = minfo.size;  // TODO: REMOVE
 
   // Compute average distances for 0/2, 3/4, and 6/8
 
-  if (localId < size) {
-    int avg1 = 0;
-    int avg2 = 0;
-    int avg3 = 0;
+  int avg1 = 0;
+  int avg2 = 0;
+  int avg3 = 0;
 
-    if (totalNum[1] > 0 || totalNum[2] > 0) {
-      avg1 = (totalDistance[1] + totalDistance[2]) / (totalNum[1] + totalNum[2]);
-    }
-
-    if (totalNum[3] > 0 || totalNum[4] > 0) {
-      avg2 = (totalDistance[3] + totalDistance[4]) / (totalNum[3] + totalNum[4]);
-    }
-
-    if (totalNum[6] > 0 || totalNum[8] > 0) {
-      avg3 = (totalDistance[6] + totalDistance[8]) / (totalNum[6] + totalNum[8]);
-    }
-
-    int adjPrio = priority_map(thisPriority, thisDistance, min10, avg1, avg2, avg3);
-    int prioIdx = atomicAdd(totalMappedNum[adjPrio], 1);
-
-    prio = adjPrio;
-    return prioIdx;
+  if (priorityData[modelIndex].totalNum[1] > 0 || priorityData[modelIndex].totalNum[2] > 0) {
+    avg1 = (priorityData[modelIndex].totalDistance[1] + priorityData[modelIndex].totalDistance[2]) / (priorityData[modelIndex].totalNum[1] + priorityData[modelIndex].totalNum[2]);
   }
 
-  prio = 0;
-  return 0;
+  if (priorityData[modelIndex].totalNum[3] > 0 || priorityData[modelIndex].totalNum[4] > 0) {
+    avg2 = (priorityData[modelIndex].totalDistance[3] + priorityData[modelIndex].totalDistance[4]) / (priorityData[modelIndex].totalNum[3] + priorityData[modelIndex].totalNum[4]);
+  }
+
+  if (priorityData[modelIndex].totalNum[6] > 0 || priorityData[modelIndex].totalNum[8] > 0) {
+    avg3 = (priorityData[modelIndex].totalDistance[6] + priorityData[modelIndex].totalDistance[8]) / (priorityData[modelIndex].totalNum[6] + priorityData[modelIndex].totalNum[8]);
+  }
+
+  int adjPrio = priority_map(thisPriority, thisDistance, priorityData[modelIndex].min10, avg1, avg2, avg3);
+  int prioIdx = atomicAdd(priorityData[modelIndex].totalMappedNum[adjPrio], 1);
+
+  prio = adjPrio;
+  return prioIdx;
 }
 
-void insert_face(uint localId, modelinfo minfo, int adjPrio, int distance, int prioIdx) {
-  int size = minfo.size;
+void insert_face(uint localId, uint modelIndex, modelinfo minfo, int adjPrio, int distance, int prioIdx) {
+  int size = minfo.size; // TODO: REMOVE
 
-  if (localId < size) {
-    // calculate base offset into renderPris based on number of faces with a lower priority
-    int baseOff = count_prio_offset(adjPrio);
-    // the furthest faces draw first, and have the highest priority.
-    // if two faces have the same distance, the one with the
-    // lower id draws first.
-    renderPris[baseOff + prioIdx] = distance << 16 | int(~localId & 0xffffu);
-  }
+  // calculate base offset into renderPris based on number of faces with a lower priority
+  int baseOff = count_prio_offset(adjPrio, modelIndex);
+  // the furthest faces draw first, and have the highest priority.
+  // if two faces have the same distance, the one with the
+  // lower id draws first.
+  renderPris[minfo.modelSizePrefixSum + baseOff + prioIdx] = distance << 16 | int(~localId & 0xffffu);
 }
 
 int tile_height(int z, int x, int y) {
@@ -226,68 +206,66 @@ ivec4 hillskew_vertex(ivec4 v, int hillskew, int y, int plane) {
   }
 }
 
-void sort_and_insert(uint localId, modelinfo minfo, int thisPriority, int thisDistance, ivec4 thisrvA, ivec4 thisrvB, ivec4 thisrvC) {
-  int size = minfo.size;
+void sort_and_insert(uint localId, uint modelIndex, modelinfo minfo, int thisPriority, int thisDistance, ivec4 thisrvA, ivec4 thisrvB, ivec4 thisrvC) {
+  int size = minfo.size; // TODO: REMOVE
 
-  if (localId < size) {
-    int outOffset = minfo.idx;
-    int toffset = minfo.toffset;
-    int flags = minfo.flags;
+  int outOffset = minfo.idx;
+  int toffset = minfo.toffset;
+  int flags = minfo.flags;
 
-    // we only have to order faces against others of the same priority
-    const int priorityOffset = count_prio_offset(thisPriority);
-    const int numOfPriority = totalMappedNum[thisPriority];
-    const int start = priorityOffset;                // index of first face with this priority
-    const int end = priorityOffset + numOfPriority;  // index of last face with this priority
-    const int renderPriority = thisDistance << 16 | int(~localId & 0xffffu);
-    int myOffset = priorityOffset;
+  // we only have to order faces against others of the same priority
+  const int priorityOffset = count_prio_offset(thisPriority, modelIndex);
+  const int numOfPriority = priorityData[modelIndex].totalMappedNum[thisPriority];
+  const int start = priorityOffset;                // index of first face with this priority
+  const int end = priorityOffset + numOfPriority;  // index of last face with this priority
+  const int renderPriority = thisDistance << 16 | int(~localId & 0xffffu);
+  int myOffset = priorityOffset;
 
-    // calculate position this face will be in
-    for (int i = start; i < end; ++i) {
-      if (renderPriority < renderPris[i]) {
-        ++myOffset;
-      }
+  // calculate position this face will be in
+  for (int i = start; i < end; ++i) {
+    if (renderPriority < renderPris[minfo.modelSizePrefixSum + i]) {
+      ++myOffset;
     }
+  }
 
-    // position into scene
-    ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
-    thisrvA += pos;
-    thisrvB += pos;
-    thisrvC += pos;
+  // position into scene
+  ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
+  thisrvA += pos;
+  thisrvB += pos;
+  thisrvC += pos;
 
-    // apply hillskew
-    int plane = (flags >> 24) & 3;
-    int hillskew = (flags >> 26) & 1;
-    thisrvA = hillskew_vertex(thisrvA, hillskew, minfo.y, plane);
-    thisrvB = hillskew_vertex(thisrvB, hillskew, minfo.y, plane);
-    thisrvC = hillskew_vertex(thisrvC, hillskew, minfo.y, plane);
+  // apply hillskew
+  int plane = (flags >> 24) & 3;
+  int hillskew = (flags >> 26) & 1;
+  thisrvA = hillskew_vertex(thisrvA, hillskew, minfo.y, plane);
+  thisrvB = hillskew_vertex(thisrvB, hillskew, minfo.y, plane);
+  thisrvC = hillskew_vertex(thisrvC, hillskew, minfo.y, plane);
 
-    // write to out buffer
-    vertexOutBuffer[outOffset + myOffset * 3] = thisrvA;
-    vertexOutBuffer[outOffset + myOffset * 3 + 1] = thisrvB;
-    vertexOutBuffer[outOffset + myOffset * 3 + 2] = thisrvC;
+  // write to out buffer
+  vertexOutBuffer[outOffset + myOffset * 3] = thisrvA;
+  vertexOutBuffer[outOffset + myOffset * 3 + 1] = thisrvB;
+  vertexOutBuffer[outOffset + myOffset * 3 + 2] = thisrvC;
 
-    if (toffset < 0) {
-      uvOutBuffer[outOffset + myOffset * 3] = vec4(0);
-      uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(0);
-      uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(0);
+  if (toffset < 0) {
+    uvOutBuffer[outOffset + myOffset * 3] = vec4(0);
+    uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(0);
+    uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(0);
+  } else {
+    vec4 texA, texB, texC;
+
+    if (flags >= 0) {
+      texA = tempTextureBuffer[toffset + localId * 3];
+      texB = tempTextureBuffer[toffset + localId * 3 + 1];
+      texC = tempTextureBuffer[toffset + localId * 3 + 2];
     } else {
-      vec4 texA, texB, texC;
-
-      if (flags >= 0) {
-        texA = tempTextureBuffer[toffset + localId * 3];
-        texB = tempTextureBuffer[toffset + localId * 3 + 1];
-        texC = tempTextureBuffer[toffset + localId * 3 + 2];
-      } else {
-        texA = textureBuffer[toffset + localId * 3];
-        texB = textureBuffer[toffset + localId * 3 + 1];
-        texC = textureBuffer[toffset + localId * 3 + 2];
-      }
-
-      int orientation = flags & 0x7ff;
-      uvOutBuffer[outOffset + myOffset * 3] = vec4(texA.x, rotatef(texA.yzw, orientation) + pos.xyz);
-      uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(texB.x, rotatef(texB.yzw, orientation) + pos.xyz);
-      uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(texC.x, rotatef(texC.yzw, orientation) + pos.xyz);
+      texA = textureBuffer[toffset + localId * 3];
+      texB = textureBuffer[toffset + localId * 3 + 1];
+      texC = textureBuffer[toffset + localId * 3 + 2];
     }
+
+    int orientation = flags & 0x7ff;
+    uvOutBuffer[outOffset + myOffset * 3] = vec4(texA.x, rotatef(texA.yzw, orientation) + pos.xyz);
+    uvOutBuffer[outOffset + myOffset * 3 + 1] = vec4(texB.x, rotatef(texB.yzw, orientation) + pos.xyz);
+    uvOutBuffer[outOffset + myOffset * 3 + 2] = vec4(texC.x, rotatef(texC.yzw, orientation) + pos.xyz);
   }
 }

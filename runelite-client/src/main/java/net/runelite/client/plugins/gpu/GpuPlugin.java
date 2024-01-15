@@ -154,9 +154,16 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		.add(GL43C.GL_VERTEX_SHADER, "vert.glsl")
 		.add(GL43C.GL_GEOMETRY_SHADER, "geom.glsl")
 		.add(GL43C.GL_FRAGMENT_SHADER, "frag.glsl");
-
-	static final Shader COMPUTE_PROGRAM = new Shader()
-		.add(GL43C.GL_COMPUTE_SHADER, "comp.glsl");
+	static final Shader ORDERED_SETUP_COMPUTE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "compute/ordered_setup.glsl");
+	static final Shader ORDERED_CALCULATE_PRIORITY_DISTANCE_COMPUTE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "compute/ordered_calculate_priority_distance.glsl");
+	static final Shader ORDERED_MAP_FACE_PRIORITY_COMPUTE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "compute/ordered_map_face_priority.glsl");
+	static final Shader ORDERED_INSERT_FACE_COMPUTE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "compute/ordered_insert_face.glsl");
+	static final Shader ORDERED_SORT_AND_INSERT_COMPUTE_PROGRAM = new Shader()
+			.add(GL43C.GL_COMPUTE_SHADER, "compute/ordered_sort_and_insert.glsl");
 
 	static final Shader UNORDERED_COMPUTE_PROGRAM = new Shader()
 		.add(GL43C.GL_COMPUTE_SHADER, "comp_unordered.glsl");
@@ -165,11 +172,17 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		.add(GL43C.GL_VERTEX_SHADER, "vertui.glsl")
 		.add(GL43C.GL_FRAGMENT_SHADER, "fragui.glsl");
 
+	static final int orderedComputeGroupSize = 1024;
+	static final int orderedSetupComputeGroupSize = 32;
 	static final int unorderedComputeGroupSize = 1024;
 
 	private int glProgram;
-	private int glComputeProgram;
+	private int glOrderedSetupComputeProgram;
 	private int glUnorderedComputeProgram;
+	private int glOrderedCalculatePriorityDistanceComputeProgram;
+	private int glOrderedMapFacePriorityProgram;
+	private int glOrderedInsertFaceProgram;
+	private int glOrderedSortAndInsertProgram;
 	private int glUiProgram;
 
 	private int vaoCompute;
@@ -192,6 +205,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private final GLBuffer tmpModelBufferUnordered = new GLBuffer("model buffer unordered");
 	private final GLBuffer tmpOutBuffer = new GLBuffer("out vertex buffer");
 	private final GLBuffer tmpOutUvBuffer = new GLBuffer("out tex buffer");
+	private final GLBuffer priorityDataBuffer = new GLBuffer("priority data buffer");
+	private final GLBuffer renderPriorityBuffer = new GLBuffer("render priority buffer");
 
 	private int textureArrayId;
 	private int tileHeightTex;
@@ -264,7 +279,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	private int uniTextureLightMode;
 	private int uniTick;
 	private int uniUnorderedModelCount;
-	private int uniOrderedModelCount;
+	// Instead of grabbing a uniform location for every ordered model pass,
+	// we explicitly set it to the following number in the shader and share that index for all passes
+	private static final int orderedModelCountUniformLocation = 0;
 
 	private boolean lwjglInitted = false;
 
@@ -556,28 +573,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		client.setUnlockedFpsTarget(actualSwapInterval == 0 ? config.fpsTarget() : 0);
 		checkGLErrors();
 	}
-
-	private Template createTemplate(int threadCount, int facesPerThread)
-	{
-		String versionHeader = OSType.getOSType() == OSType.Linux ? LINUX_VERSION_HEADER : WINDOWS_VERSION_HEADER;
-		Template template = new Template();
-		template.add(key ->
-		{
-			if ("version_header".equals(key))
-			{
-				return versionHeader;
-			}
-			if ("thread_config".equals(key))
-			{
-				return "#define THREAD_COUNT " + threadCount + "\n" +
-					"#define FACES_PER_THREAD " + facesPerThread + "\n";
-			}
-			return null;
-		});
-		template.addInclude(GpuPlugin.class);
-		return template;
-	}
-
 	private Template createDispatchTemplate(int workGroupSizeX, int workGroupSizeY, int workGroupSizeZ)
 	{
 		String versionHeader = OSType.getOSType() == OSType.Linux ? LINUX_VERSION_HEADER : WINDOWS_VERSION_HEADER;
@@ -602,14 +597,19 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 	private void initProgram() throws ShaderException
 	{
-		Template template = createTemplate(-1, -1);
+		Template template = createDispatchTemplate(-1, -1, -1);
 		glProgram = PROGRAM.compile(template);
 		glUiProgram = UI_PROGRAM.compile(template);
 
 		if (computeMode == ComputeMode.OPENGL)
 		{
-			glComputeProgram = COMPUTE_PROGRAM.compile(createTemplate(1024, 6));
 			glUnorderedComputeProgram = UNORDERED_COMPUTE_PROGRAM.compile(createDispatchTemplate(unorderedComputeGroupSize, 1, 1));
+
+			glOrderedSetupComputeProgram = ORDERED_SETUP_COMPUTE_PROGRAM.compile(createDispatchTemplate(orderedSetupComputeGroupSize, 18, 1));
+			glOrderedCalculatePriorityDistanceComputeProgram = ORDERED_CALCULATE_PRIORITY_DISTANCE_COMPUTE_PROGRAM.compile(createDispatchTemplate(orderedComputeGroupSize, 1, 1));
+			glOrderedMapFacePriorityProgram = ORDERED_MAP_FACE_PRIORITY_COMPUTE_PROGRAM.compile(createDispatchTemplate(orderedComputeGroupSize, 1, 1));
+			glOrderedInsertFaceProgram = ORDERED_INSERT_FACE_COMPUTE_PROGRAM.compile(createDispatchTemplate(orderedComputeGroupSize, 1, 1));
+			glOrderedSortAndInsertProgram = ORDERED_SORT_AND_INSERT_COMPUTE_PROGRAM.compile(createDispatchTemplate(orderedComputeGroupSize, 1, 1));
 		}
 		else if (computeMode == ComputeMode.OPENCL)
 		{
@@ -645,13 +645,12 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 		if (computeMode == ComputeMode.OPENGL)
 		{
-			uniBlockLarge = GL43C.glGetUniformBlockIndex(glComputeProgram, "uniforms");
+			uniBlockLarge = GL43C.glGetUniformBlockIndex(glUnorderedComputeProgram, "uniforms"); // TODO: this is not correct. we techically need a block for each compute shader
 
 			// The uniform block is updated before anything is drawn so model counts would be zero
 			// So instead of adding new fields to the uniform block and trying to update just those bytes later,
 			// We just use normal uniforms and update them when we know the counts
 			uniUnorderedModelCount = GL43C.glGetUniformLocation(glUnorderedComputeProgram, "unorderedModelCount");
-			uniOrderedModelCount = GL43C.glGetUniformLocation(glComputeProgram, "orderedModelCount");
 		}
 	}
 
@@ -660,11 +659,23 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glDeleteProgram(glProgram);
 		glProgram = -1;
 
-		GL43C.glDeleteProgram(glComputeProgram);
-		glComputeProgram = -1;
+		GL43C.glDeleteProgram(glOrderedSetupComputeProgram);
+		glOrderedSetupComputeProgram = -1;
 
 		GL43C.glDeleteProgram(glUnorderedComputeProgram);
 		glUnorderedComputeProgram = -1;
+
+		GL43C.glDeleteProgram(glOrderedCalculatePriorityDistanceComputeProgram);
+		glOrderedCalculatePriorityDistanceComputeProgram = -1;
+
+		GL43C.glDeleteProgram(glOrderedMapFacePriorityProgram);
+		glOrderedMapFacePriorityProgram = -1;
+
+		GL43C.glDeleteProgram(glOrderedInsertFaceProgram);
+		glOrderedInsertFaceProgram = -1;
+
+		GL43C.glDeleteProgram(glOrderedSortAndInsertProgram);
+		glOrderedSortAndInsertProgram = -1;
 
 		GL43C.glDeleteProgram(glUiProgram);
 		glUiProgram = -1;
@@ -751,6 +762,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		initGlBuffer(tmpModelBufferUnordered);
 		initGlBuffer(tmpOutBuffer);
 		initGlBuffer(tmpOutUvBuffer);
+		initGlBuffer(priorityDataBuffer);
+		initGlBuffer(renderPriorityBuffer);
 	}
 
 	private void initGlBuffer(GLBuffer glBuffer)
@@ -769,6 +782,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		destroyGlBuffer(tmpModelBufferUnordered);
 		destroyGlBuffer(tmpOutBuffer);
 		destroyGlBuffer(tmpOutUvBuffer);
+		destroyGlBuffer(priorityDataBuffer);
+		destroyGlBuffer(renderPriorityBuffer);
 	}
 
 	private void destroyGlBuffer(GLBuffer glBuffer)
@@ -811,7 +826,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	{
 		initGlBuffer(uniformBuffer);
 
-		IntBuffer uniformBuf = GpuIntBuffer.allocateDirect(8 + 2048 * 4);
+		IntBuffer uniformBuf = GpuIntBuffer.allocateDirect(8 * 4 + 2048 * 4);
 		uniformBuf.put(new int[8]); // uniform block
 		final int[] pad = new int[2];
 		for (int i = 0; i < 2048; i++)
@@ -969,6 +984,27 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			GL43C.GL_STREAM_DRAW,
 			CL12.CL_MEM_WRITE_ONLY);
 
+		/*
+		struct prioritydata {
+		  int totalNum[12];        // number of faces with a given priority
+		  int totalDistance[12];   // sum of distances to faces of a given priority
+		  int totalMappedNum[18];  // number of faces with a given adjusted priority
+		  int min10;               // minimum distance to a face of priority 10
+		  int _pad;
+		};
+		*/
+		final int priorityDataSize = 12*4 + 12*4 + 18*4 + 4 + 4; // TODO: remove padding?
+		updateBuffer(priorityDataBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				priorityDataSize * orderedModelCount,
+				GL43C.GL_STREAM_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+		updateBuffer(renderPriorityBuffer,
+				GL43C.GL_ARRAY_BUFFER,
+				orderedModelTriangleCount*2*4,
+				GL43C.GL_STREAM_DRAW,
+				CL12.CL_MEM_READ_WRITE);
+
 		if (computeMode == ComputeMode.OPENCL)
 		{
 			// The docs for clEnqueueAcquireGLObjects say all pending GL operations must be completed before calling
@@ -987,8 +1023,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			checkGLErrors();
 			return;
 		}
-		// Bind UBO to compute programs
-		GL43C.glUniformBlockBinding(glComputeProgram, uniBlockLarge, 0);
 
 		// unordered
 		GL43C.glUseProgram(glUnorderedComputeProgram);
@@ -1001,11 +1035,13 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
 
 		int unorderedGroupCount = (unorderedModelTriangleCount + unorderedComputeGroupSize - 1) / unorderedComputeGroupSize;
 		GL43C.glDispatchCompute(unorderedGroupCount, 1, 1);
 
-		// large
+		/*
 		GL43C.glUseProgram(glComputeProgram);
 		GL43C.glUniform1i(uniOrderedModelCount, orderedModelCount);
 
@@ -1016,8 +1052,93 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
 		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
 
-		GL43C.glDispatchCompute(orderedModelCount, 1, 1);
+		int orderedGroupCount = (orderedModelTriangleCount + orderedComputeGroupSize - 1) / orderedComputeGroupSize;
+		GL43C.glDispatchCompute(orderedGroupCount, 1, 1);
+
+		 */
+
+		GL43C.glUseProgram(glOrderedSetupComputeProgram);
+		GL43C.glUniform1i(orderedModelCountUniformLocation, orderedModelCount);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
+		int orderedSetupGroupCount = (orderedModelCount + orderedSetupComputeGroupSize - 1) / orderedSetupComputeGroupSize;
+		GL43C.glDispatchCompute(orderedSetupGroupCount, 1, 1);
+
+		GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+		GL43C.glUseProgram(glOrderedCalculatePriorityDistanceComputeProgram);
+		GL43C.glUniformBlockBinding(glOrderedCalculatePriorityDistanceComputeProgram, GL43C.glGetUniformBlockIndex(glOrderedCalculatePriorityDistanceComputeProgram, "uniforms"), 0); // TODO: cache location
+		GL43C.glUniform1i(orderedModelCountUniformLocation, orderedModelCount);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
+
+		int orderedGroupCount = (orderedModelTriangleCount + orderedComputeGroupSize - 1) / orderedComputeGroupSize;
+		GL43C.glDispatchCompute(orderedGroupCount, 1, 1);
+
+		GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+		GL43C.glUseProgram(glOrderedMapFacePriorityProgram);
+		GL43C.glUniformBlockBinding(glOrderedMapFacePriorityProgram, GL43C.glGetUniformBlockIndex(glOrderedMapFacePriorityProgram, "uniforms"), 0); // TODO: cache location
+		GL43C.glUniform1i(orderedModelCountUniformLocation, orderedModelCount);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
+		GL43C.glDispatchCompute(orderedGroupCount, 1, 1);
+
+		GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+		GL43C.glUseProgram(glOrderedInsertFaceProgram);
+		GL43C.glUniformBlockBinding(glOrderedInsertFaceProgram, GL43C.glGetUniformBlockIndex(glOrderedInsertFaceProgram, "uniforms"), 0); // TODO: cache location
+		GL43C.glUniform1i(orderedModelCountUniformLocation, orderedModelCount);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
+		GL43C.glDispatchCompute(orderedGroupCount, 1, 1);
+
+		GL43C.glMemoryBarrier(GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
+
+		GL43C.glUseProgram(glOrderedSortAndInsertProgram);
+		GL43C.glUniformBlockBinding(glOrderedSortAndInsertProgram, GL43C.glGetUniformBlockIndex(glOrderedSortAndInsertProgram, "uniforms"), 0); // TODO: cache location
+		GL43C.glUniform1i(orderedModelCountUniformLocation, orderedModelCount);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 0, tmpModelBufferLarge.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 1, sceneVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 2, tmpVertexBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 3, tmpOutBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 4, tmpOutUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 5, sceneUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 6, tmpUvBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 7, priorityDataBuffer.glBufferId);
+		GL43C.glBindBufferBase(GL43C.GL_SHADER_STORAGE_BUFFER, 8, renderPriorityBuffer.glBufferId);
+		GL43C.glDispatchCompute(orderedGroupCount, 1, 1);
 
 		checkGLErrors();
 	}
@@ -1079,21 +1200,23 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			final int localY = 0;
 			final int localZ = tileY << Perspective.LOCAL_COORD_BITS;
 
-			GpuIntBuffer b = modelBufferUnordered;
-			++unorderedModelCount;
+			if ((model.getBufferLen() / 3) > 0) {
+				GpuIntBuffer b = modelBufferUnordered;
+				++unorderedModelCount;
 
-			b.ensureCapacity(9);
-			IntBuffer buffer = b.getBuffer();
-			buffer.put(model.getBufferOffset());
-			buffer.put(model.getUvBufferOffset());
-			buffer.put(model.getBufferLen() / 3);
-			buffer.put(targetBufferOffset);
-			buffer.put(FLAG_SCENE_BUFFER);
-			buffer.put(unorderedModelTriangleCount);
-			buffer.put(localX).put(localY).put(localZ);
+				b.ensureCapacity(9);
+				IntBuffer buffer = b.getBuffer();
+				buffer.put(model.getBufferOffset());
+				buffer.put(model.getUvBufferOffset());
+				buffer.put(model.getBufferLen() / 3);
+				buffer.put(targetBufferOffset);
+				buffer.put(FLAG_SCENE_BUFFER);
+				buffer.put(unorderedModelTriangleCount);
+				buffer.put(localX).put(localY).put(localZ);
 
-			unorderedModelTriangleCount += model.getBufferLen() / 3;
-			targetBufferOffset += model.getBufferLen();
+				unorderedModelTriangleCount += model.getBufferLen() / 3;
+				targetBufferOffset += model.getBufferLen();
+			}
 		}
 	}
 
@@ -1352,7 +1475,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		modelBuffer.clear();
 		modelBufferUnordered.clear();
 
-		orderedModelCount = unorderedModelCount = unorderedModelTriangleCount = 0;
+		orderedModelCount = unorderedModelCount = orderedModelTriangleCount = unorderedModelTriangleCount = 0;
 		tempOffset = 0;
 		tempUvOffset = 0;
 
@@ -1766,19 +1889,21 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			int plane = (int) ((hash >> 49) & 3);
 			boolean hillskew = offsetModel != model;
 
-			GpuIntBuffer b = bufferForTriangles();
+			if (tc > 0) {
+				GpuIntBuffer b = bufferForTriangles();
 
-			b.ensureCapacity(9);
-			IntBuffer buffer = b.getBuffer();
-			buffer.put(offsetModel.getBufferOffset());
-			buffer.put(uvOffset);
-			buffer.put(tc);
-			buffer.put(targetBufferOffset);
-			buffer.put(FLAG_SCENE_BUFFER | (hillskew ? (1 << 26) : 0) | (plane << 24) | orientation);
-			buffer.put(orderedModelTriangleCount);
-			buffer.put(x + client.getCameraX2()).put(y + client.getCameraY2()).put(z + client.getCameraZ2());
-			orderedModelTriangleCount += tc;
-			targetBufferOffset += tc * 3;
+				b.ensureCapacity(9);
+				IntBuffer buffer = b.getBuffer();
+				buffer.put(offsetModel.getBufferOffset());
+				buffer.put(uvOffset);
+				buffer.put(tc);
+				buffer.put(targetBufferOffset);
+				buffer.put(FLAG_SCENE_BUFFER | (hillskew ? (1 << 26) : 0) | (plane << 24) | orientation);
+				buffer.put(orderedModelTriangleCount);
+				buffer.put(x + client.getCameraX2()).put(y + client.getCameraY2()).put(z + client.getCameraZ2());
+				orderedModelTriangleCount += tc;
+				targetBufferOffset += tc * 3;
+			}
 		}
 		else
 		{
@@ -1801,26 +1926,27 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 			int len = sceneUploader.pushModel(model, vertexBuffer, uvBuffer);
 
-			GpuIntBuffer b = bufferForTriangles();
+			if (len > 0) {
+				GpuIntBuffer b = bufferForTriangles();
 
-			b.ensureCapacity(9);
-			IntBuffer buffer = b.getBuffer();
-			buffer.put(tempOffset);
-			buffer.put(hasUv ? tempUvOffset : -1);
-			buffer.put(len / 3);
-			buffer.put(targetBufferOffset);
-			buffer.put(orientation);
-			buffer.put(orderedModelTriangleCount);
-			buffer.put(x + client.getCameraX2()).put(y + client.getCameraY2()).put(z + client.getCameraZ2());
+				b.ensureCapacity(9);
+				IntBuffer buffer = b.getBuffer();
+				buffer.put(tempOffset);
+				buffer.put(hasUv ? tempUvOffset : -1);
+				buffer.put(len / 3);
+				buffer.put(targetBufferOffset);
+				buffer.put(orientation);
+				buffer.put(orderedModelTriangleCount);
+				buffer.put(x + client.getCameraX2()).put(y + client.getCameraY2()).put(z + client.getCameraZ2());
 
-			orderedModelTriangleCount += len/3;
-			tempOffset += len;
-			if (hasUv)
-			{
-				tempUvOffset += len;
+				orderedModelTriangleCount += len / 3;
+				tempOffset += len;
+				if (hasUv) {
+					tempUvOffset += len;
+				}
+
+				targetBufferOffset += len;
 			}
-
-			targetBufferOffset += len;
 		}
 	}
 

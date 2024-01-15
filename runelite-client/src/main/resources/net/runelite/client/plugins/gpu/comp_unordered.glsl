@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018, Adam <Adam@sigterm.info>
+ * Copyright (c) 2024, Toocanzs <https://github.com/toocanzs>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,32 +32,12 @@ uniform int unorderedModelCount;
 
 layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = LOCAL_SIZE_Z) in;
 
-int binary_search_for_model_index(int modelCount, int triangleIndex) {
-  int low = 0;
-  int high = modelCount - 1;
-  while (low <= high) {
-    int mid = low + (high - low) / 2;
-
-    modelinfo info = modelInfos[mid];
-    int triangleStartIndex = info.modelCountPrefixSum;
-    int triangleEndIndex = info.modelCountPrefixSum + info.size;
-
-    if (triangleIndex >= triangleStartIndex && triangleIndex < triangleEndIndex) {
-      return mid;
-    }
-    else if (triangleIndex >= triangleEndIndex) {
-      low = mid + 1;
-    }
-    else {
-      high = mid - 1;
-    }
-  }
-  return -1;
-}
-
 void main() {
   uint globalTriangleIndex = gl_GlobalInvocationID.x;
   int modelIndex = binary_search_for_model_index(unorderedModelCount, int(globalTriangleIndex));
+  
+  barrier(); // Regroup after the binary search to avoid divergence
+
   // Out of bounds invocations will get a -1 model index and return early
   if (modelIndex != -1) {
     modelinfo minfo = modelInfos[modelIndex];
@@ -66,7 +47,7 @@ void main() {
     int outOffset = minfo.idx;
     int toffset = minfo.toffset;
     int flags = minfo.flags;
-    uint modelTriangleIndex = globalTriangleIndex - minfo.modelCountPrefixSum;
+    uint modelTriangleIndex = globalTriangleIndex - minfo.modelSizePrefixSum;
 
     uint ssboOffset = modelTriangleIndex;
     ivec4 thisA, thisB, thisC;
