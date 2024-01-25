@@ -79,18 +79,6 @@ int priority_map(int p, int distance, int _min10, int avg1, int avg2, int avg3) 
   }
 }
 
-// calculate the number of faces with a lower adjusted priority than
-// the given adjusted priority
-int count_prio_offset(int priority) {
-  // this shouldn't ever be outside of (0, 17) because it is the return value from priority_map
-  priority = clamp(priority, 0, 17);
-  int total = 0;
-  for (int i = 0; i < priority; i++) {
-    total += totalMappedNum[i];
-  }
-  return total;
-}
-
 void get_face(uint localId, modelinfo minfo, float cameraYaw, float cameraPitch, out int prio, out int dis, out ivec4 o1, out ivec4 o2, out ivec4 o3) {
   int size = minfo.size;
   int offset = minfo.offset;
@@ -160,7 +148,7 @@ void add_face_prio_distance(uint localId, modelinfo minfo, ivec4 thisrvA, ivec4 
   }
 }
 
-int map_face_priority(uint localId, modelinfo minfo, int thisPriority, int thisDistance, out int prio) {
+int map_face_priority(uint localId, modelinfo minfo, int thisPriority, int thisDistance) {
   int size = minfo.size;
 
   // Compute average distances for 0/2, 3/4, and 6/8
@@ -183,26 +171,40 @@ int map_face_priority(uint localId, modelinfo minfo, int thisPriority, int thisD
     }
 
     int adjPrio = priority_map(thisPriority, thisDistance, min10, avg1, avg2, avg3);
-    int prioIdx = atomicAdd(totalMappedNum[adjPrio], 1);
 
-    prio = adjPrio;
-    return prioIdx;
+    return adjPrio;
   }
 
-  prio = 0;
   return 0;
 }
 
-void insert_face(uint localId, modelinfo minfo, int adjPrio, int distance, int prioIdx) {
+uint render_priority(int adjPrio, int distance, uint localId) {
+  #define PRIORITY_BITS 5  // 18 priorities
+  #define DISTANCE_BITS 14 // arbitrary amount of distance bits. Needs to at least fit -2048 to 2048 ints converted to uints, so at least 4096
+  #define LOCALID_BITS 13  // 6144 maximum triangles
+
+  #define PRIOIRTY_MASK ((1 << PRIORITY_BITS) - 1)
+
+  #define DISTANCE_MASK ((1 << DISTANCE_BITS) - 1)
+  #define DISTANCE_ADD (1 << (DISTANCE_BITS - 1)) // Adding the minimum signed integer value to convert to uint
+
+  #define LOCALID_MASK ((1 << LOCALID_BITS) - 1)
+
+  uint p = uint(adjPrio) & PRIOIRTY_MASK;
+  uint d = uint(-distance + DISTANCE_ADD) & DISTANCE_MASK;
+  uint l = localId & LOCALID_MASK;
+  return (p << (DISTANCE_BITS + LOCALID_BITS)) | (d << DISTANCE_BITS) | l;
+}
+
+void insert_face(uint localId, modelinfo minfo, int adjPrio, int distance) {
   int size = minfo.size;
 
   if (localId < size) {
-    // calculate base offset into renderPris based on number of faces with a lower priority
-    int baseOff = count_prio_offset(adjPrio);
     // the furthest faces draw first, and have the highest priority.
     // if two faces have the same distance, the one with the
     // lower id draws first.
-    renderPris[baseOff + prioIdx] = distance << 16 | int(~localId & 0xffffu);
+    // the sorted order of these dictate the order in which to draw the triangles
+    renderPris[localId] = render_priority(adjPrio, distance, localId);
   }
 }
 
@@ -233,61 +235,67 @@ void sort_and_insert(uint localId, modelinfo minfo, int thisPriority, int thisDi
     int outOffset = minfo.idx;
     int toffset = minfo.toffset;
     int flags = minfo.flags;
+    const uint renderPriority = render_priority(thisPriority, thisDistance, localId);
 
-    // we only have to order faces against others of the same priority
-    const int priorityOffset = count_prio_offset(thisPriority);
-    const int numOfPriority = totalMappedNum[thisPriority];
-    const int start = priorityOffset;                // index of first face with this priority
-    const int end = priorityOffset + numOfPriority;  // index of last face with this priority
-    const int renderPriority = thisDistance << 16 | int(~localId & 0xffffu);
-    int myOffset = priorityOffset;
-
-    // calculate position this face will be in
-    for (int i = start; i < end; ++i) {
-      if (renderPriority < renderPris[i]) {
-        ++myOffset;
+    int low = 0;
+    int high = size - 1;
+    int resultIndex = -1;
+    while (low <= high) {
+      int mid = low + (high - low) / 2;
+      if (renderPris[mid] == renderPriority) {
+        resultIndex = mid;
+        break;
+      } else if (renderPris[mid] < renderPriority) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
     }
 
-    // position into scene
-    ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
-    thisrvA += pos;
-    thisrvB += pos;
-    thisrvC += pos;
+    bool found = low <= high;
+    if (found) {
+      int myOffset = resultIndex;
 
-    // apply hillskew
-    int plane = (flags >> 24) & 3;
-    int hillskew = (flags >> 26) & 1;
-    thisrvA = hillskew_vertex(thisrvA, hillskew, minfo.y, plane);
-    thisrvB = hillskew_vertex(thisrvB, hillskew, minfo.y, plane);
-    thisrvC = hillskew_vertex(thisrvC, hillskew, minfo.y, plane);
+      // position into scene
+      ivec4 pos = ivec4(minfo.x, minfo.y, minfo.z, 0);
+      thisrvA += pos;
+      thisrvB += pos;
+      thisrvC += pos;
 
-    // write to out buffer
-    vout[outOffset + myOffset * 3] = thisrvA;
-    vout[outOffset + myOffset * 3 + 1] = thisrvB;
-    vout[outOffset + myOffset * 3 + 2] = thisrvC;
+      // apply hillskew
+      int plane = (flags >> 24) & 3;
+      int hillskew = (flags >> 26) & 1;
+      thisrvA = hillskew_vertex(thisrvA, hillskew, minfo.y, plane);
+      thisrvB = hillskew_vertex(thisrvB, hillskew, minfo.y, plane);
+      thisrvC = hillskew_vertex(thisrvC, hillskew, minfo.y, plane);
 
-    if (toffset < 0) {
-      uvout[outOffset + myOffset * 3] = vec4(0);
-      uvout[outOffset + myOffset * 3 + 1] = vec4(0);
-      uvout[outOffset + myOffset * 3 + 2] = vec4(0);
-    } else {
-      vec4 texA, texB, texC;
+      // write to out buffer
+      vout[outOffset + myOffset * 3] = thisrvA;
+      vout[outOffset + myOffset * 3 + 1] = thisrvB;
+      vout[outOffset + myOffset * 3 + 2] = thisrvC;
 
-      if (flags >= 0) {
-        texA = temptexb[toffset + localId * 3];
-        texB = temptexb[toffset + localId * 3 + 1];
-        texC = temptexb[toffset + localId * 3 + 2];
+      if (toffset < 0) {
+        uvout[outOffset + myOffset * 3] = vec4(0);
+        uvout[outOffset + myOffset * 3 + 1] = vec4(0);
+        uvout[outOffset + myOffset * 3 + 2] = vec4(0);
       } else {
-        texA = texb[toffset + localId * 3];
-        texB = texb[toffset + localId * 3 + 1];
-        texC = texb[toffset + localId * 3 + 2];
-      }
+        vec4 texA, texB, texC;
 
-      int orientation = flags & 0x7ff;
-      uvout[outOffset + myOffset * 3] = vec4(texA.x, rotatef(texA.yzw, orientation) + pos.xyz);
-      uvout[outOffset + myOffset * 3 + 1] = vec4(texB.x, rotatef(texB.yzw, orientation) + pos.xyz);
-      uvout[outOffset + myOffset * 3 + 2] = vec4(texC.x, rotatef(texC.yzw, orientation) + pos.xyz);
+        if (flags >= 0) {
+          texA = temptexb[toffset + localId * 3];
+          texB = temptexb[toffset + localId * 3 + 1];
+          texC = temptexb[toffset + localId * 3 + 2];
+        } else {
+          texA = texb[toffset + localId * 3];
+          texB = texb[toffset + localId * 3 + 1];
+          texC = texb[toffset + localId * 3 + 2];
+        }
+
+        int orientation = flags & 0x7ff;
+        uvout[outOffset + myOffset * 3] = vec4(texA.x, rotatef(texA.yzw, orientation) + pos.xyz);
+        uvout[outOffset + myOffset * 3 + 1] = vec4(texB.x, rotatef(texB.yzw, orientation) + pos.xyz);
+        uvout[outOffset + myOffset * 3 + 2] = vec4(texC.x, rotatef(texC.yzw, orientation) + pos.xyz);
+      }
     }
   }
 }
