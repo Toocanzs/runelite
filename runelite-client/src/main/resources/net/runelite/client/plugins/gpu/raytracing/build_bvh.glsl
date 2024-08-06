@@ -30,7 +30,7 @@ layout(std430, binding = 1) readonly buffer _sorted_key_values {
 };
 
 layout(std430, binding = 2) readonly buffer _vertex_buffer {
-    ivec4 vertex_buffer[];
+    vec4 vertex_buffer[];
 };
 
 int count_leading_zeros(uint num) {
@@ -64,12 +64,12 @@ void main() {
             uint triangle_index = node_index - leaf_node_offset;
 
             uint base_vertex_index = triangle_index * 3;
-            ivec3 vA = vertex_buffer[base_vertex_index + 0].xyz;
-            ivec3 vB = vertex_buffer[base_vertex_index + 1].xyz;
-            ivec3 vC = vertex_buffer[base_vertex_index + 2].xyz;
+            vec3 vA = vertex_buffer[base_vertex_index + 0].xyz;
+            vec3 vB = vertex_buffer[base_vertex_index + 1].xyz;
+            vec3 vC = vertex_buffer[base_vertex_index + 2].xyz;
 
-            ivec3 aabb_min = min(vA, min(vB, vC));
-            ivec3 aabb_max = max(vA, max(vB, vC));
+            vec3 aabb_min = min(vA, min(vB, vC));
+            vec3 aabb_max = max(vA, max(vB, vC));
 
             nodes[node_index].leaf_object_id_plus_one = triangle_index + 1;
             nodes[node_index].aabb_min = aabb_min;

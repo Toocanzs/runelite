@@ -19,7 +19,7 @@ struct MinMax {
 };
 
 layout(std430, binding = 0) readonly buffer _vertex_buffer {
-    ivec4 vertex_buffer[];
+    vec4 vertex_buffer[];
 };
 
 layout(std430, binding = 1) readonly buffer _min_max {
@@ -65,12 +65,12 @@ void main() {
         uint triangle_index = gl_GlobalInvocationID.x;
         uint base_vertex_index = triangle_index * 3;
 
-        ivec3 vA = vertex_buffer[base_vertex_index + 0].xyz;
-        ivec3 vB = vertex_buffer[base_vertex_index + 1].xyz;
-        ivec3 vC = vertex_buffer[base_vertex_index + 2].xyz;
+        vec3 vA = vertex_buffer[base_vertex_index + 0].xyz;
+        vec3 vB = vertex_buffer[base_vertex_index + 1].xyz;
+        vec3 vC = vertex_buffer[base_vertex_index + 2].xyz;
 
-        ivec3 aabb_min = min(vA, min(vB, vC));
-        ivec3 aabb_max = max(vA, max(vB, vC));
+        vec3 aabb_min = min(vA, min(vB, vC));
+        vec3 aabb_max = max(vA, max(vB, vC));
 
         vec3 aabb_center = vec3(aabb_min + aabb_max) / 2.0;
 

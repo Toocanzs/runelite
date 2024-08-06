@@ -44,7 +44,7 @@ uniform mat4 viewMatrix;
 //uniform mat4 projection;
 
 layout(std430, binding = 0) readonly buffer _Vertexbuffer {
-    ivec4 vb[];
+    vec4 vb[];
 } Vertexbuffer;
 
 #include "raytracing/bvh_node.glsl"
@@ -131,9 +131,9 @@ vec4 traverseBVH(vec3 ray_origin, vec3 ray_dir, vec3 inverse_ray_dir, out vec3 n
     if (bvh_nodes[current_node_index].leaf_object_id_plus_one != 0) {// leaf
       uint triangle_index = bvh_nodes[current_node_index].leaf_object_id_plus_one - 1;
       uint base_vertex_index = triangle_index * 3;
-      ivec3 vA = Vertexbuffer.vb[base_vertex_index + 0].xyz;
-      ivec3 vB = Vertexbuffer.vb[base_vertex_index + 1].xyz;
-      ivec3 vC = Vertexbuffer.vb[base_vertex_index + 2].xyz;
+      vec3 vA = Vertexbuffer.vb[base_vertex_index + 0].xyz;
+      vec3 vB = Vertexbuffer.vb[base_vertex_index + 1].xyz;
+      vec3 vC = Vertexbuffer.vb[base_vertex_index + 2].xyz;
 
       // TODO: use a hit test here without uvs
       float t;
@@ -171,15 +171,15 @@ vec4 traverseBVH(vec3 ray_origin, vec3 ray_dir, vec3 inverse_ray_dir, out vec3 n
   vec4 c = vec4(0);
   if (best_triangle_index != 0xFFFFFFFF) {
     uint base_vertex_index = best_triangle_index * 3;
-    ivec4 vA = Vertexbuffer.vb[base_vertex_index + 0];
-    ivec4 vB = Vertexbuffer.vb[base_vertex_index + 1];
-    ivec4 vC = Vertexbuffer.vb[base_vertex_index + 2];
+    vec4 vA = Vertexbuffer.vb[base_vertex_index + 0];
+    vec4 vB = Vertexbuffer.vb[base_vertex_index + 1];
+    vec4 vC = Vertexbuffer.vb[base_vertex_index + 2];
 
     vec3 tuv = triIntersect(ray_origin, ray_dir, vec3(vA.xyz), vec3(vB.xyz), vec3(vC.xyz));
     if (tuv.x >= 0) {
-        vec3 colorA = hslToRgb(vA.w & 0xffff);
-        vec3 colorB = hslToRgb(vB.w & 0xffff);
-        vec3 colorC = hslToRgb(vC.w & 0xffff);
+        vec3 colorA = hslToRgb(floatBitsToInt(vA.w) & 0xffff);
+        vec3 colorB = hslToRgb(floatBitsToInt(vB.w) & 0xffff);
+        vec3 colorC = hslToRgb(floatBitsToInt(vC.w) & 0xffff);
 
         vec3 barry = vec3(1.0 - tuv.y - tuv.z, tuv.y, tuv.z);
         vec3 tri_color = barry.x * colorA + barry.y * colorB + barry.z * colorC;
@@ -242,16 +242,16 @@ void main() {
   for (int i = 0; i < vertexCount/3; i++) {
     BVHNode node = bvh_nodes[leaf_node_offset + i];
     uint triangle_index = node.leaf_object_id_plus_one - 1;
-    ivec4 vA = Vertexbuffer.vb[triangle_index*3 + 0];
-    ivec4 vB = Vertexbuffer.vb[triangle_index*3 + 1];
-    ivec4 vC = Vertexbuffer.vb[triangle_index*3 + 2];
+    vec4 vA = Vertexbuffer.vb[triangle_index*3 + 0];
+    vec4 vB = Vertexbuffer.vb[triangle_index*3 + 1];
+    vec4 vC = Vertexbuffer.vb[triangle_index*3 + 2];
 
     vec3 tuv = triIntersect(ray_origin, ray_dir, vec3(vA.x, vA.y, vA.z), vec3(vB.x, vB.y, vB.z), vec3(vC.x, vC.y, vC.z));
 
     if (tuv.x >= 0 && tuv.x < lowestDepth) {
-        vec3 colorA = hslToRgb(vA.w & 0xffff);
-        vec3 colorB = hslToRgb(vB.w & 0xffff);
-        vec3 colorC = hslToRgb(vC.w & 0xffff);
+        vec3 colorA = hslToRgb(floatBitsToInt(vA.w) & 0xffff);
+        vec3 colorB = hslToRgb(floatBitsToInt(vB.w) & 0xffff);
+        vec3 colorC = hslToRgb(floatBitsToInt(vC.w) & 0xffff);
 
         vec3 barry = vec3(1.0 - tuv.y - tuv.z, tuv.y, tuv.z);
         c.rgb = barry.x * colorA + barry.y * colorB + barry.z * colorC;
