@@ -622,13 +622,6 @@ public interface Widget
 	String[] getActions();
 
 	/**
-	 * Create a static widget child
-	 * @param type the {@link WidgetType} of the widget
-	 * @return
-	 */
-	Widget createStaticChild(@MagicConstant(valuesFromClass = WidgetType.class) int type);
-
-	/**
 	 * Creates a dynamic widget child
 	 *
 	 * @param index the index of the new widget in the children list or -1 to append to the back
@@ -655,6 +648,11 @@ public interface Widget
 	 * @param action The verb to be displayed next to the widget's name in the context menu
 	 */
 	void setAction(int index, String action);
+
+	/**
+	 * Clear the menu options on a widget.
+	 */
+	void clearActions();
 
 	/**
 	 * Sets a script to be ran when the a menu action is clicked.
